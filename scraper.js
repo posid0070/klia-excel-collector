@@ -1,9 +1,6 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const archiver = require('archiver');
-const fetch = require('node-fetch');
-const FormData = require('form-data');
 
 async function run() {
   console.log('브라우저 시작 중...');
