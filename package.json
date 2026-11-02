@@ -1,14 +1,16 @@
 {
-  "name": "klia-browser-downloader",
+  "name": "klia-excel-collector",
   "version": "1.0.0",
   "private": true,
-  "main": "server.js",
+  "main": "scraper.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "archiver": "^7.0.1",
     "express": "^4.21.2",
-    "playwright": "^1.51.1"
+    "playwright": "^1.51.1",
+    "node-fetch": "^2.7.0",
+    "form-data": "^4.0.0"
   }
 }
