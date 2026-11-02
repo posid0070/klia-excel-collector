@@ -1,0 +1,27 @@
+name: KLIA Excel Auto Scraper
+
+on:
+  workflow_dispatch: # 수동 실행 가능
+  schedule:
+    - cron: '0 22 1 * *' # 매월 1일 오전 7시 (KST 기준) 실행
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Scraper
+        run: node scraper.js
