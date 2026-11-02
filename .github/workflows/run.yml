@@ -1,27 +1,46 @@
 name: KLIA Excel Auto Scraper
 
 on:
-  workflow_dispatch: # 수동 실행 가능
-  schedule:
-    - cron: '0 22 1 * *' # 매월 1일 오전 7시 (KST 기준) 실행
+  workflow_dispatch:
 
 jobs:
+
   scrape:
+
     runs-on: ubuntu-latest
+
+    timeout-minutes: 15
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: "24"
 
       - name: Install dependencies
         run: npm install
 
-      - name: Install Playwright Browsers
+      - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run Scraper
+      - name: Run scraper
         run: node scraper.js
+
+      - name: Show downloaded files
+        if: always()
+        run: |
+          echo "다운로드된 파일:"
+          ls -lah downloads || true
+
+      - name: Save Excel files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: klia-excel-files
+          path: downloads/
+          if-no-files-found: warn
+          retention-days: 7
