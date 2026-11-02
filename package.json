@@ -1,0 +1,14 @@
+{
+  "name": "klia-browser-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.21.2",
+    "playwright": "^1.51.1"
+  }
+}
