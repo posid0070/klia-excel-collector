@@ -67,6 +67,17 @@ jobs:
           UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
           TARGET_MONTH: ${{ github.event.inputs.target_month }}
         run: node build_db.js
+
+              - name: AI classify products with Google Search
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash-lite
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
+          TARGET_MONTH: ${{ github.event.inputs.target_month }}
+        run: node ai_classify.js
+
+        
       - name: Save run artifacts
         if: always()
 
