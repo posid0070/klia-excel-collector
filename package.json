@@ -1,12 +1,13 @@
 {
   "name": "klia-excel-collector",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "main": "scraper.js",
   "scripts": {
     "start": "node scraper.js"
   },
   "dependencies": {
-    "playwright": "^1.51.1"
+    "playwright": "^1.51.1",
+    "xlsx": "^0.18.5"
   }
 }
