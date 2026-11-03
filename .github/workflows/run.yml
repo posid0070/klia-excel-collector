@@ -63,7 +63,7 @@ jobs:
       - name: AI classify products with Google Search
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.5-flash-lite
+          GEMINI_MODEL: gemini-2.5-flash-lite
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
           TARGET_MONTH: ${{ github.event.inputs.target_month }}
