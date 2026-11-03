@@ -3,25 +3,20 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 
-// ============================================================
-// 기본 설정
-// ============================================================
-
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const DB_FILE_NAME = '생보협회_상품DB.xlsx';
-
 const UPLOAD_URL = process.env.UPLOAD_URL;
 const UPLOAD_SECRET = process.env.UPLOAD_SECRET;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const TARGET_MONTH_OVERRIDE = String(process.env.TARGET_MONTH || '').trim();
 
 const INSWEEK_LIST_URL =
   'https://www.insweek.co.kr/news/articleList.html?page=1&total=2120&sc_section_code=&sc_sub_section_code=S2N19&sc_serial_code=&sc_area=&sc_level=&sc_article_type=&sc_view_level=&sc_sdate=&sc_edate=&sc_serial_number=&sc_word=&sc_andor=&sc_word2=&box_idxno=&sc_multi_code=&sc_is_image=&sc_is_movie=&sc_user_name=&sc_order_by=E';
 
 const MAX_INSWEEK_PAGES = 20;
+const MAX_SOURCE_TEXT = 5500;
 
-// AI 심층분석 대상 회사는 앞으로 고정
 const AI_TARGET_COMPANIES = [
   '삼성생명',
   '한화생명',
@@ -30,111 +25,111 @@ const AI_TARGET_COMPANIES = [
   'NH농협생명'
 ];
 
-const LIFE_INSURERS = [
-  '삼성생명',
-  '한화생명',
-  '교보생명',
-  '신한라이프',
-  'NH농협생명',
-  '동양생명',
-  'ABL생명',
-  '흥국생명',
-  '미래에셋생명',
-  '메트라이프생명',
-  'KB라이프',
-  'KDB생명',
-  '푸본현대생명',
-  '라이나생명',
-  'AIA생명',
-  '처브라이프',
-  '하나생명',
-  'DB생명',
-  'BNP파리바카디프생명',
-  'IBK연금보험',
-  '교보라이프플래닛'
-];
-
 const COMPANY_ALIASES = {
   삼성생명: ['삼성생명'],
   한화생명: ['한화생명'],
   교보생명: ['교보생명'],
   신한라이프: ['신한라이프', '신한생명'],
-  NH농협생명: ['NH농협생명', '농협생명'],
-  동양생명: ['동양생명'],
-  ABL생명: ['ABL생명'],
-  흥국생명: ['흥국생명'],
-  미래에셋생명: ['미래에셋생명'],
-  메트라이프생명: ['메트라이프생명', '메트라이프'],
-  KB라이프: ['KB라이프', 'KB생명', '푸르덴셜생명'],
-  KDB생명: ['KDB생명'],
-  푸본현대생명: ['푸본현대생명'],
-  라이나생명: ['라이나생명'],
-  AIA생명: ['AIA생명'],
-  처브라이프: ['처브라이프'],
-  하나생명: ['하나생명'],
-  DB생명: ['DB생명'],
-  BNP파리바카디프생명: ['BNP파리바카디프생명', '카디프생명'],
-  IBK연금보험: ['IBK연금보험'],
-  교보라이프플래닛: ['교보라이프플래닛', '라이프플래닛']
+  NH농협생명: ['NH농협생명', '농협생명']
 };
 
-// ============================================================
-// 공통 함수
-// ============================================================
+const OFFICIAL_DOMAINS = {
+  삼성생명: ['samsunglife.com'],
+  한화생명: ['hanwhalife.com'],
+  교보생명: ['news.kyobo.com', 'kyobo.com'],
+  신한라이프: ['shinhanlife.co.kr'],
+  NH농협생명: ['nhlife.co.kr']
+};
 
-function clean(value) {
-  return String(value || '')
+const clean = v =>
+  String(v || '')
     .replace(/\u00a0/g, ' ')
     .replace(/\r/g, ' ')
     .replace(/\n+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
 
-function norm(value) {
-  return clean(value)
+const norm = v =>
+  clean(v)
     .toLowerCase()
     .replace(/[\s\(\)\[\]\{\}·ㆍ\-_,.\/\\:：'"“”‘’]/g, '');
-}
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+const sleep = ms =>
+  new Promise(resolve => setTimeout(resolve, ms));
+
+const pad2 = n =>
+  String(n).padStart(2, '0');
+
+const makeDate = (y, m, d) => {
+  y = Number(y);
+  m = Number(m);
+  d = Number(d);
+
+  return y &&
+    m >= 1 &&
+    m <= 12 &&
+    d >= 1 &&
+    d <= 31
+    ? `${y}-${pad2(m)}-${pad2(d)}`
+    : '';
+};
 
 function getTargetMonth() {
   if (TARGET_MONTH_OVERRIDE) {
     if (!/^\d{4}-\d{2}$/.test(TARGET_MONTH_OVERRIDE)) {
-      throw new Error('TARGET_MONTH는 YYYY-MM 형식이어야 합니다.');
+      throw new Error(
+        'TARGET_MONTH는 YYYY-MM 형식이어야 합니다.'
+      );
     }
+
     return TARGET_MONTH_OVERRIDE;
   }
 
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Seoul',
-      year: 'numeric',
-      month: '2-digit'
-    })
-      .formatToParts(new Date())
-      .map(p => [p.type, p.value])
-  );
+  const parts =
+    Object.fromEntries(
+      new Intl.DateTimeFormat(
+        'en-US',
+        {
+          timeZone: 'Asia/Seoul',
+          year: 'numeric',
+          month: '2-digit'
+        }
+      )
+        .formatToParts(new Date())
+        .map(p => [p.type, p.value])
+    );
 
-  let year = Number(parts.year);
-  let month = Number(parts.month) - 1;
+  let year =
+    Number(parts.year);
+
+  let month =
+    Number(parts.month) - 1;
 
   if (month === 0) {
     year -= 1;
     month = 12;
   }
 
-  return `${year}-${String(month).padStart(2, '0')}`;
+  return `${year}-${pad2(month)}`;
 }
 
 function canonicalCompany(value) {
   const s = norm(value);
 
-  for (const [company, aliases] of Object.entries(COMPANY_ALIASES)) {
-    if (aliases.some(alias => s.includes(norm(alias)))) {
+  for (
+    const [company, aliases]
+    of Object.entries(
+      COMPANY_ALIASES
+    )
+  ) {
+    if (
+      aliases.some(
+        alias =>
+          s.includes(
+            norm(alias)
+          )
+      )
+    ) {
       return company;
     }
   }
@@ -142,13 +137,26 @@ function canonicalCompany(value) {
   return clean(value);
 }
 
-function detectCompanyFromText(text) {
+function detectTargetCompany(text) {
   const s = norm(text);
 
-  for (const company of LIFE_INSURERS) {
-    const aliases = COMPANY_ALIASES[company] || [company];
+  for (
+    const company
+    of AI_TARGET_COMPANIES
+  ) {
+    const aliases =
+      COMPANY_ALIASES[
+        company
+      ] || [company];
 
-    if (aliases.some(alias => s.includes(norm(alias)))) {
+    if (
+      aliases.some(
+        alias =>
+          s.includes(
+            norm(alias)
+          )
+      )
+    ) {
       return company;
     }
   }
@@ -156,22 +164,23 @@ function detectCompanyFromText(text) {
   return '';
 }
 
-function isLifeInsurer(company) {
-  return LIFE_INSURERS.includes(
-    canonicalCompany(company)
-  );
-}
-
-function isAiTargetCompany(company) {
-  return AI_TARGET_COMPANIES.includes(
-    canonicalCompany(company)
-  );
-}
+const isAiTargetCompany =
+  value =>
+    AI_TARGET_COMPANIES
+      .includes(
+        canonicalCompany(
+          value
+        )
+      );
 
 function makeFamilyKey(row) {
   return [
-    norm(row['보험구분']),
-    norm(row['상품유형']),
+    norm(
+      row['보험구분']
+    ),
+    norm(
+      row['상품유형']
+    ),
     norm(
       canonicalCompany(
         row['보험회사명']
@@ -189,18 +198,19 @@ function sheetRows(
   sheetName
 ) {
   const sheet =
-    workbook.Sheets[sheetName];
+    workbook.Sheets[
+      sheetName
+    ];
 
-  if (!sheet) {
-    return [];
-  }
-
-  return XLSX.utils.sheet_to_json(
-    sheet,
-    {
-      defval: ''
-    }
-  );
+  return sheet
+    ? XLSX.utils
+        .sheet_to_json(
+          sheet,
+          {
+            defval: ''
+          }
+        )
+    : [];
 }
 
 function replaceSheet(
@@ -209,22 +219,27 @@ function replaceSheet(
   rows
 ) {
   const index =
-    workbook.SheetNames.indexOf(
-      sheetName
-    );
+    workbook
+      .SheetNames
+      .indexOf(
+        sheetName
+      );
 
   if (index >= 0) {
-    workbook.SheetNames.splice(
-      index,
-      1
-    );
+    workbook
+      .SheetNames
+      .splice(
+        index,
+        1
+      );
 
-    delete workbook.Sheets[
-      sheetName
-    ];
+    delete workbook
+      .Sheets[
+        sheetName
+      ];
   }
 
-  const safeRows =
+  const data =
     rows.length
       ? rows
       : [
@@ -235,11 +250,12 @@ function replaceSheet(
         ];
 
   const sheet =
-    XLSX.utils.json_to_sheet(
-      safeRows
-    );
+    XLSX.utils
+      .json_to_sheet(
+        data
+      );
 
-  if (rows.length > 0) {
+  if (rows.length) {
     const headers =
       Object.keys(
         rows[0]
@@ -247,127 +263,43 @@ function replaceSheet(
 
     sheet['!autofilter'] = {
       ref:
-        XLSX.utils.encode_range({
-          s: {
-            r: 0,
-            c: 0
-          },
-          e: {
-            r:
-              rows.length,
-            c:
-              headers.length - 1
-          }
-        })
+        XLSX.utils
+          .encode_range({
+            s: {
+              r: 0,
+              c: 0
+            },
+            e: {
+              r: rows.length,
+              c:
+                headers.length - 1
+            }
+          })
     };
-
-    sheet['!cols'] =
-      headers.map(
-        header => {
-          if (
-            [
-              '상품군명',
-              '세부상품명',
-              '기사제목',
-              '보험신보기사제목',
-              'AI주요특징',
-              'AI확인근거',
-              '보험신보출시근거'
-            ].includes(
-              header
-            )
-          ) {
-            return {
-              wch: 48
-            };
-          }
-
-          if (
-            [
-              'URL',
-              '보험신보URL',
-              'AI출처URL'
-            ].includes(
-              header
-            )
-          ) {
-            return {
-              wch: 55
-            };
-          }
-
-          return {
-            wch: 18
-          };
-        }
-      );
   }
 
-  XLSX.utils.book_append_sheet(
-    workbook,
-    sheet,
-    sheetName
-  );
-}
-
-// ============================================================
-// 날짜 처리
-// ============================================================
-
-function pad2(value) {
-  return String(value)
-    .padStart(
-      2,
-      '0'
+  XLSX.utils
+    .book_append_sheet(
+      workbook,
+      sheet,
+      sheetName
     );
 }
 
-function makeDate(
-  year,
-  month,
-  day
-) {
-  const y =
-    Number(year);
-
-  const m =
-    Number(month);
-
-  const d =
-    Number(day);
-
-  if (
-    !y ||
-    m < 1 ||
-    m > 12 ||
-    d < 1 ||
-    d > 31
-  ) {
-    return '';
-  }
-
-  return (
-    `${y}-` +
-    `${pad2(m)}-` +
-    `${pad2(d)}`
-  );
-}
-
-function parseArticleListDate(
+function parseListDate(
   text,
   targetMonth
 ) {
   const s =
     clean(text);
 
-  const [
-    targetYearText
-  ] =
-    targetMonth.split('-');
-
-  const targetYear =
+  const year =
     Number(
-      targetYearText
+      targetMonth
+        .slice(
+          0,
+          4
+        )
     );
 
   let match =
@@ -385,25 +317,12 @@ function parseArticleListDate(
 
   match =
     s.match(
-      /(?:^|\s)(\d{1,2})-(\d{1,2})(?:\s+\d{1,2}:\d{2})?/
+      /(?:^|\s)(\d{1,2})[-.](\d{1,2})(?:\s+\d{1,2}:\d{2})?/
     );
 
   if (match) {
     return makeDate(
-      targetYear,
-      match[1],
-      match[2]
-    );
-  }
-
-  match =
-    s.match(
-      /(?:^|\s)(\d{1,2})\.(\d{1,2})(?:\s+\d{1,2}:\d{2})?/
-    );
-
-  if (match) {
-    return makeDate(
-      targetYear,
+      year,
       match[1],
       match[2]
     );
@@ -412,17 +331,30 @@ function parseArticleListDate(
   return '';
 }
 
-function extractLaunchDateInfo(
-  articleText,
-  articleDate
-) {
-  const raw =
-    String(
-      articleText || ''
-    );
+function extractPageDate(text) {
+  const match =
+    clean(text)
+      .match(
+        /(20\d{2})[.\-/년\s]+(\d{1,2})[.\-/월\s]+(\d{1,2})/
+      );
 
+  return match
+    ? makeDate(
+        match[1],
+        match[2],
+        match[3]
+      )
+    : '';
+}
+
+function extractLaunchDateInfo(
+  text,
+  referenceDate
+) {
   const sentences =
-    raw
+    String(
+      text || ''
+    )
       .replace(
         /\r/g,
         '\n'
@@ -433,8 +365,8 @@ function extractLaunchDateInfo(
       .map(clean)
       .filter(Boolean);
 
-  const launchKeyword =
-    /(출시|판매를?\s*시작|판매개시|판매\s*개시|선보|개정\s*출시|출시할|출시한다|출시했다|판매한다)/;
+  const keyword =
+    /(출시|판매를?\s*시작|판매개시|판매\s*개시|개정\s*출시|선보|판매한다|출시한다|출시했다)/;
 
   const candidates = [];
 
@@ -443,7 +375,7 @@ function extractLaunchDateInfo(
     of sentences
   ) {
     if (
-      !launchKeyword.test(
+      !keyword.test(
         sentence
       )
     ) {
@@ -463,9 +395,7 @@ function extractLaunchDateInfo(
             match[2],
             match[3]
           ),
-
         sentence,
-
         score: 100
       });
 
@@ -479,24 +409,19 @@ function extractLaunchDateInfo(
 
     if (
       match &&
-      articleDate
+      referenceDate
     ) {
-      const year =
-        articleDate.slice(
-          0,
-          4
-        );
-
       candidates.push({
         date:
           makeDate(
-            year,
+            referenceDate.slice(
+              0,
+              4
+            ),
             match[1],
             match[2]
           ),
-
         sentence,
-
         score: 90
       });
 
@@ -505,43 +430,30 @@ function extractLaunchDateInfo(
 
     match =
       sentence.match(
-        /(?:이달\s*)?(?:지난\s*|오는\s*)?(\d{1,2})일(?:부터|에)?/
+        /(?:지난\s*|오는\s*|이달\s*)?(\d{1,2})일(?:부터|에)?/
       );
 
     if (
       match &&
-      articleDate
+      referenceDate
     ) {
-      const [
-        year,
-        month
-      ] =
-        articleDate.split(
-          '-'
-        );
-
       candidates.push({
         date:
           makeDate(
-            year,
-            month,
+            referenceDate.slice(
+              0,
+              4
+            ),
+            referenceDate.slice(
+              5,
+              7
+            ),
             match[1]
           ),
-
         sentence,
-
         score: 70
       });
     }
-  }
-
-  if (
-    !candidates.length
-  ) {
-    return {
-      date: '',
-      sentence: ''
-    };
   }
 
   candidates.sort(
@@ -550,20 +462,16 @@ function extractLaunchDateInfo(
       a.score
   );
 
-  return {
-    date:
-      candidates[0].date,
-
-    sentence:
-      candidates[0].sentence
-  };
+  return (
+    candidates[0] ||
+    {
+      date: '',
+      sentence: ''
+    }
+  );
 }
 
-// ============================================================
-// 보험신보 신상품 섹션 수집
-// ============================================================
-
-function buildInsweekPageUrl(
+function insweekPageUrl(
   pageNo
 ) {
   const url =
@@ -579,7 +487,7 @@ function buildInsweekPageUrl(
   return url.toString();
 }
 
-async function getArticleCards(
+async function getInsweekCards(
   page,
   targetMonth
 ) {
@@ -589,69 +497,59 @@ async function getArticleCards(
         'a[href*="articleView.html"]'
       )
       .evaluateAll(
-        nodes => {
-          const results = [];
+        nodes =>
+          nodes.map(
+            a => {
+              let parent =
+                a;
 
-          for (
-            const a
-            of nodes
-          ) {
-            let parent = a;
-            let context = '';
+              let context = '';
 
-            for (
-              let i = 0;
-              i < 6;
-              i++
-            ) {
-              parent =
-                parent &&
-                parent.parentElement;
-
-              if (!parent) {
-                break;
-              }
-
-              const text =
-                (
-                  parent.innerText ||
-                  ''
-                ).trim();
-
-              if (!text) {
-                continue;
-              }
-
-              if (
-                /\b\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}\b/.test(
-                  text
-                ) ||
-                /\b20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}\b/.test(
-                  text
-                )
+              for (
+                let i = 0;
+                i < 7;
+                i++
               ) {
-                context = text;
-                break;
+                parent =
+                  parent &&
+                  parent.parentElement;
+
+                if (!parent) {
+                  break;
+                }
+
+                const text =
+                  (
+                    parent.innerText ||
+                    ''
+                  ).trim();
+
+                if (
+                  /\b\d{1,2}[-.]\d{1,2}\s+\d{1,2}:\d{2}\b/
+                    .test(
+                      text
+                    )
+                ) {
+                  context =
+                    text;
+
+                  break;
+                }
               }
+
+              return {
+                url:
+                  a.href || '',
+                title:
+                  (
+                    a.innerText ||
+                    a.textContent ||
+                    ''
+                  ).trim(),
+                context
+              };
             }
-
-            results.push({
-              url:
-                a.href || '',
-
-              title:
-                (
-                  a.innerText ||
-                  a.textContent ||
-                  ''
-                ).trim(),
-
-              context
-            });
-          }
-
-          return results;
-        }
+          )
       );
 
   const map =
@@ -670,7 +568,7 @@ async function getArticleCards(
     }
 
     const articleDate =
-      parseArticleListDate(
+      parseListDate(
         item.context,
         targetMonth
       );
@@ -680,37 +578,32 @@ async function getArticleCards(
     }
 
     const url =
-      item.url.split(
-        '#'
-      )[0];
-
-    const existing =
-      map.get(url);
+      item.url
+        .split('#')[0];
 
     if (
-      !existing ||
+      !map.has(url) ||
       clean(
         item.title
       ).length >
-        clean(
-          existing.title
-        ).length
+      clean(
+        map.get(
+          url
+        ).title
+      ).length
     ) {
       map.set(
         url,
         {
           url,
-
           title:
             clean(
               item.title
             ),
-
           context:
             clean(
               item.context
             ),
-
           articleDate
         }
       );
@@ -722,7 +615,7 @@ async function getArticleCards(
   ];
 }
 
-async function collectTargetMonthInsweekArticles(
+async function collectInsweek(
   browser,
   targetMonth
 ) {
@@ -735,7 +628,7 @@ async function collectTargetMonthInsweekArticles(
   const end =
     `${targetMonth}-31`;
 
-  const collected =
+  const map =
     new Map();
 
   try {
@@ -745,41 +638,37 @@ async function collectTargetMonthInsweekArticles(
       MAX_INSWEEK_PAGES;
       pageNo++
     ) {
-      const url =
-        buildInsweekPageUrl(
-          pageNo
-        );
-
       console.log(
         `보험신보 신상품 ${pageNo}페이지 확인`
       );
 
       try {
         await page.goto(
-          url,
+          insweekPageUrl(
+            pageNo
+          ),
           {
             waitUntil:
               'domcontentloaded',
-
             timeout:
               30000
           }
         );
 
         await page.waitForTimeout(
-          600
+          500
         );
 
       } catch (error) {
         console.log(
-          `보험신보 목록 접속 실패: ${error.message}`
+          `보험신보 목록 실패: ${error.message}`
         );
 
         continue;
       }
 
       const cards =
-        await getArticleCards(
+        await getInsweekCards(
           page,
           targetMonth
         );
@@ -788,22 +677,21 @@ async function collectTargetMonthInsweekArticles(
         continue;
       }
 
-      for (
-        const card
-        of cards
-      ) {
-        if (
-          card.articleDate >=
-            start &&
-          card.articleDate <=
-            end
-        ) {
-          collected.set(
-            card.url,
-            card
-          );
-        }
-      }
+      cards
+        .filter(
+          card =>
+            card.articleDate >=
+              start &&
+            card.articleDate <=
+              end
+        )
+        .forEach(
+          card =>
+            map.set(
+              card.url,
+              card
+            )
+        );
 
       if (
         cards.every(
@@ -815,25 +703,19 @@ async function collectTargetMonthInsweekArticles(
         break;
       }
 
-      const hasTarget =
+      if (
         cards.some(
           card =>
             card.articleDate >=
               start &&
             card.articleDate <=
               end
-        );
-
-      const hasOlder =
+        ) &&
         cards.some(
           card =>
             card.articleDate <
             start
-        );
-
-      if (
-        hasTarget &&
-        hasOlder
+        )
       ) {
         break;
       }
@@ -844,26 +726,27 @@ async function collectTargetMonthInsweekArticles(
   }
 
   return [
-    ...collected.values()
+    ...map.values()
   ].sort(
     (a, b) =>
-      b.articleDate.localeCompare(
-        a.articleDate
-      )
+      b.articleDate
+        .localeCompare(
+          a.articleDate
+        )
   );
 }
 
-async function fetchArticleDetails(
+async function readPage(
   page,
-  article
+  url,
+  knownTitle = ''
 ) {
   try {
     await page.goto(
-      article.url,
+      url,
       {
         waitUntil:
           'domcontentloaded',
-
         timeout:
           30000
       }
@@ -875,20 +758,14 @@ async function fetchArticleDetails(
 
   } catch (error) {
     return {
-      ...article,
-
-      company:
-        detectCompanyFromText(
-          `${article.title} ${article.context}`
-        ),
-
+      url,
+      title:
+        knownTitle,
       body: '',
-
+      pageDate: '',
       launchDate: '',
-
       launchSentence: '',
-
-      fetchError:
+      error:
         error.message
     };
   }
@@ -896,7 +773,7 @@ async function fetchArticleDetails(
   const data =
     await page.evaluate(
       () => {
-        const firstText =
+        const pick =
           selectors => {
             for (
               const selector
@@ -923,31 +800,29 @@ async function fetchArticleDetails(
             return '';
           };
 
-        const title =
-          firstText([
-            'h1',
-            '.article-head-title',
-            '.article-view-head-title',
-            '.article-title'
-          ]);
-
-        const body =
-          firstText([
-            '[itemprop="articleBody"]',
-            '#article-view-content-div',
-            '.article-view-content-div',
-            '.article-body',
-            '.article-content',
-            'article'
-          ]);
-
         return {
-          title,
+          title:
+            pick([
+              'h1',
+              '.article-head-title',
+              '.article-view-head-title',
+              '.article-title'
+            ]),
 
           body:
-            body ||
-            document.body
-              ?.innerText ||
+            pick([
+              '[itemprop="articleBody"]',
+              '#article-view-content-div',
+              '.article-view-content-div',
+              '.article-body',
+              '.article-content',
+              'article',
+              'main'
+            ]) ||
+            (
+              document.body &&
+              document.body.innerText
+            ) ||
             ''
         };
       }
@@ -956,7 +831,7 @@ async function fetchArticleDetails(
   const title =
     clean(
       data.title ||
-      article.title
+      knownTitle
     );
 
   const body =
@@ -964,42 +839,36 @@ async function fetchArticleDetails(
       data.body
     ).slice(
       0,
-      16000
+      18000
     );
 
-  const company =
-    detectCompanyFromText(
-      `${title} ${body}`
+  const pageDate =
+    extractPageDate(
+      body
     );
 
   const launch =
     extractLaunchDateInfo(
       body,
-      article.articleDate
+      pageDate
     );
 
   return {
-    ...article,
-
+    url,
     title,
-
-    company,
-
     body,
-
+    pageDate,
     launchDate:
       launch.date,
-
     launchSentence:
       launch.sentence,
-
-    fetchError: ''
+    error: ''
   };
 }
 
-async function enrichInsweekArticles(
+async function enrichInsweek(
   browser,
-  articles
+  items
 ) {
   const page =
     await browser.newPage();
@@ -1008,23 +877,51 @@ async function enrichInsweekArticles(
 
   try {
     for (
-      const article
-      of articles
+      const item
+      of items
     ) {
       console.log(
-        `보험신보 본문 확인: ${article.title}`
+        `보험신보 본문: ${item.title}`
       );
 
-      results.push(
-        await fetchArticleDetails(
+      const detail =
+        await readPage(
           page,
-          article
-        )
-      );
+          item.url,
+          item.title
+        );
 
-      await page.waitForTimeout(
-        200
-      );
+      const launch =
+        extractLaunchDateInfo(
+          detail.body,
+          item.articleDate ||
+          detail.pageDate
+        );
+
+      results.push({
+        ...item,
+
+        title:
+          detail.title ||
+          item.title,
+
+        body:
+          detail.body,
+
+        company:
+          detectTargetCompany(
+            `${detail.title} ${detail.body}`
+          ),
+
+        launchDate:
+          launch.date,
+
+        launchSentence:
+          launch.sentence,
+
+        error:
+          detail.error
+      });
     }
 
   } finally {
@@ -1032,54 +929,6 @@ async function enrichInsweekArticles(
   }
 
   return results;
-}
-
-// ============================================================
-// 상품 ↔ 보험신보 기사 매칭
-// ============================================================
-
-function extractQuotedNames(
-  text
-) {
-  const results = [];
-
-  const source =
-    String(
-      text || ''
-    );
-
-  const regexes = [
-    /[‘']([^’']{3,100})[’']/g,
-    /[“"]([^”"]{3,100})[”"]/g
-  ];
-
-  for (
-    const regex
-    of regexes
-  ) {
-    let match;
-
-    while (
-      (
-        match =
-          regex.exec(
-            source
-          )
-      ) !== null
-    ) {
-      results.push(
-        clean(
-          match[1]
-        )
-      );
-    }
-  }
-
-  return [
-    ...new Set(
-      results
-    )
-  ];
 }
 
 function levenshtein(
@@ -1092,26 +941,21 @@ function levenshtein(
   const t =
     norm(b);
 
-  const rows =
-    s.length + 1;
-
-  const cols =
-    t.length + 1;
-
   const dp =
     Array.from(
       {
-        length: rows
+        length:
+          s.length + 1
       },
       () =>
-        new Array(
-          cols
+        Array(
+          t.length + 1
         ).fill(0)
     );
 
   for (
     let i = 0;
-    i < rows;
+    i <= s.length;
     i++
   ) {
     dp[i][0] = i;
@@ -1119,7 +963,7 @@ function levenshtein(
 
   for (
     let j = 0;
-    j < cols;
+    j <= t.length;
     j++
   ) {
     dp[0][j] = j;
@@ -1127,12 +971,12 @@ function levenshtein(
 
   for (
     let i = 1;
-    i < rows;
+    i <= s.length;
     i++
   ) {
     for (
       let j = 1;
-      j < cols;
+      j <= t.length;
       j++
     ) {
       const cost =
@@ -1145,10 +989,8 @@ function levenshtein(
         Math.min(
           dp[i - 1][j] +
             1,
-
           dp[i][j - 1] +
             1,
-
           dp[i - 1][j - 1] +
             cost
         );
@@ -1156,9 +998,9 @@ function levenshtein(
   }
 
   return dp[
-    rows - 1
+    s.length
   ][
-    cols - 1
+    t.length
   ];
 }
 
@@ -1191,33 +1033,26 @@ function similarity(
       s,
       t
     ) /
-      Math.max(
-        s.length,
-        t.length
-      )
+    Math.max(
+      s.length,
+      t.length
+    )
   );
 }
 
-function productMatchScore(
+function matchScore(
   target,
   article
 ) {
-  const targetCompany =
+  if (
     canonicalCompany(
       target[
         '보험회사명'
       ]
-    );
-
-  const articleCompany =
+    ) !==
     canonicalCompany(
       article.company
-    );
-
-  if (
-    !targetCompany ||
-    targetCompany !==
-      articleCompany
+    )
   ) {
     return 0;
   }
@@ -1226,13 +1061,6 @@ function productMatchScore(
     clean(
       target[
         '상품군명'
-      ]
-    );
-
-  const detailNames =
-    clean(
-      target[
-        '세부상품명'
       ]
     );
 
@@ -1250,67 +1078,36 @@ function productMatchScore(
 
   if (
     norm(family) &&
-    norm(title).includes(
-      norm(family)
-    )
+    norm(title)
+      .includes(
+        norm(family)
+      )
   ) {
-    score += 60;
+    score += 65;
 
   } else if (
     norm(family) &&
-    norm(body).includes(
-      norm(family)
-    )
+    norm(body)
+      .includes(
+        norm(family)
+      )
   ) {
     score += 40;
   }
 
-  const targetNames = [
-    family,
-
-    ...detailNames
-      .split('|')
-      .map(clean)
-      .filter(Boolean)
-  ];
-
-  const quotedNames =
-    extractQuotedNames(
-      title
-    );
-
-  let bestSimilarity = 0;
-
-  for (
-    const targetName
-    of targetNames
-  ) {
-    for (
-      const quoted
-      of quotedNames
-    ) {
-      bestSimilarity =
-        Math.max(
-          bestSimilarity,
-
-          similarity(
-            targetName,
-            quoted
-          )
-        );
-    }
-  }
-
   score +=
     Math.round(
-      bestSimilarity *
-      50
+      similarity(
+        family,
+        title
+      ) *
+      45
     );
 
   return score;
 }
 
-function findBestInsweekArticle(
+function bestInsweek(
   target,
   articles
 ) {
@@ -1319,9 +1116,8 @@ function findBestInsweekArticle(
       .map(
         article => ({
           article,
-
           score:
-            productMatchScore(
+            matchScore(
               target,
               article
             )
@@ -1329,7 +1125,7 @@ function findBestInsweekArticle(
       )
       .filter(
         item =>
-          item.score > 0
+          item.score >= 55
       )
       .sort(
         (a, b) =>
@@ -1337,35 +1133,323 @@ function findBestInsweekArticle(
           a.score
       );
 
-  if (
-    !ranked.length
-  ) {
-    return null;
-  }
-
-  if (
-    ranked[0].score <
-    55
-  ) {
-    return null;
-  }
-
-  return ranked[0];
+  return ranked[0] || null;
 }
 
-// ============================================================
-// Gemini 보완
-// ============================================================
+async function bingSearch(
+  page,
+  query,
+  domain
+) {
+  const q =
+    `${query} site:${domain}`;
+
+  const url =
+    `https://www.bing.com/search?q=${encodeURIComponent(q)}`;
+
+  try {
+    await page.goto(
+      url,
+      {
+        waitUntil:
+          'domcontentloaded',
+        timeout:
+          30000
+      }
+    );
+
+    await page.waitForTimeout(
+      500
+    );
+
+  } catch {
+    return [];
+  }
+
+  return page
+    .locator(
+      'li.b_algo h2 a, #b_results h2 a'
+    )
+    .evaluateAll(
+      nodes =>
+        nodes
+          .slice(
+            0,
+            6
+          )
+          .map(
+            a => ({
+              title:
+                (
+                  a.innerText ||
+                  a.textContent ||
+                  ''
+                ).trim(),
+
+              url:
+                a.href || ''
+            })
+          )
+    );
+}
+
+function supplementQueries(
+  target,
+  targetMonth
+) {
+  const company =
+    canonicalCompany(
+      target[
+        '보험회사명'
+      ]
+    );
+
+  const product =
+    clean(
+      target[
+        '상품군명'
+      ]
+    );
+
+  const year =
+    targetMonth.slice(
+      0,
+      4
+    );
+
+  const month =
+    Number(
+      targetMonth.slice(
+        5,
+        7
+      )
+    );
+
+  const base =
+    `"${company}" "${product}" ${year} ${month}월`;
+
+  return [
+    {
+      type:
+        '보험저널',
+
+      query:
+        base,
+
+      domains: [
+        'insurancejournal.co.kr'
+      ]
+    },
+
+    {
+      type:
+        '보험사공식',
+
+      query:
+        base,
+
+      domains:
+        OFFICIAL_DOMAINS[
+          company
+        ] || []
+    }
+  ];
+}
+
+async function collectSupplements(
+  browser,
+  target,
+  targetMonth
+) {
+  const searchPage =
+    await browser.newPage();
+
+  const readPageTab =
+    await browser.newPage();
+
+  const results = [];
+
+  try {
+    for (
+      const queryInfo
+      of supplementQueries(
+        target,
+        targetMonth
+      )
+    ) {
+      for (
+        const domain
+        of queryInfo.domains
+      ) {
+        console.log(
+          `추가검색: ${canonicalCompany(
+            target['보험회사명']
+          )} / ${queryInfo.type}`
+        );
+
+        const hits =
+          await bingSearch(
+            searchPage,
+            queryInfo.query,
+            domain
+          );
+
+        let kept = 0;
+
+        for (
+          const hit
+          of hits
+        ) {
+          if (
+            kept >= 2
+          ) {
+            break;
+          }
+
+          if (
+            !hit.url.includes(
+              domain
+            )
+          ) {
+            continue;
+          }
+
+          const detail =
+            await readPage(
+              readPageTab,
+              hit.url,
+              hit.title
+            );
+
+          if (
+            !detail.body
+          ) {
+            continue;
+          }
+
+          const score =
+            (
+              norm(
+                target[
+                  '상품군명'
+                ]
+              ) &&
+              norm(
+                detail.title
+              ).includes(
+                norm(
+                  target[
+                    '상품군명'
+                  ]
+                )
+              )
+                ? 60
+                : 0
+            ) +
+            Math.round(
+              similarity(
+                target[
+                  '상품군명'
+                ],
+                detail.title
+              ) *
+              40
+            );
+
+          if (
+            score < 45
+          ) {
+            continue;
+          }
+
+          results.push({
+            sourceType:
+              queryInfo.type,
+
+            domain,
+
+            title:
+              detail.title,
+
+            url:
+              hit.url,
+
+            body:
+              detail.body.slice(
+                0,
+                MAX_SOURCE_TEXT
+              ),
+
+            pageDate:
+              detail.pageDate,
+
+            launchDate:
+              detail.launchDate,
+
+            launchSentence:
+              detail.launchSentence,
+
+            score
+          });
+
+          kept += 1;
+        }
+      }
+    }
+
+  } finally {
+    await searchPage.close();
+    await readPageTab.close();
+  }
+
+  const map =
+    new Map();
+
+  for (
+    const item
+    of results
+  ) {
+    if (
+      !map.has(
+        item.url
+      ) ||
+      item.score >
+      map.get(
+        item.url
+      ).score
+    ) {
+      map.set(
+        item.url,
+        item
+      );
+    }
+  }
+
+  return [
+    ...map.values()
+  ]
+    .sort(
+      (a, b) =>
+        b.score -
+        a.score
+    )
+    .slice(
+      0,
+      4
+    );
+}
 
 function extractOutputText(
   data
 ) {
   if (
-    typeof data.output_text ===
+    typeof
+      data.output_text ===
       'string' &&
     data.output_text.trim()
   ) {
-    return data.output_text
+    return data
+      .output_text
       .trim();
   }
 
@@ -1392,7 +1476,8 @@ function extractOutputText(
 
     for (
       const part
-      of step.content || []
+      of step.content ||
+      []
     ) {
       if (
         part.type ===
@@ -1411,79 +1496,26 @@ function extractOutputText(
     .trim();
 }
 
-function extractSourceUrls(
-  data
-) {
-  const urls =
-    new Set();
-
-  if (
-    !Array.isArray(
-      data.steps
-    )
-  ) {
-    return [];
-  }
-
-  for (
-    const step
-    of data.steps
-  ) {
-    for (
-      const part
-      of step.content || []
-    ) {
-      for (
-        const ann
-        of part.annotations || []
-      ) {
-        if (
-          ann.type ===
-          'url_citation'
-        ) {
-          const url =
-            ann.url ||
-            ann.uri ||
-            '';
-
-          if (url) {
-            urls.add(url);
-          }
-        }
-      }
-    }
-  }
-
-  return [
-    ...urls
-  ];
-}
-
 function parseJsonText(
   text
 ) {
   let s =
     String(
       text || ''
-    ).trim();
-
-  s =
-    s.replace(
-      /^```json\s*/i,
-      ''
-    );
-
-  s =
-    s.replace(
-      /^```\s*/,
-      ''
-    );
-
-  s =
-    s.replace(
-      /\s*```$/,
-      ''
-    );
+    )
+      .trim()
+      .replace(
+        /^```json\s*/i,
+        ''
+      )
+      .replace(
+        /^```\s*/,
+        ''
+      )
+      .replace(
+        /\s*```$/,
+        ''
+      );
 
   const first =
     s.indexOf('{');
@@ -1508,7 +1540,7 @@ function parseJsonText(
   );
 }
 
-async function geminiRequest(
+async function geminiNoSearch(
   prompt
 ) {
   const response =
@@ -1532,19 +1564,12 @@ async function geminiRequest(
               GEMINI_MODEL,
 
             input:
-              prompt,
-
-            tools: [
-              {
-                type:
-                  'google_search'
-              }
-            ]
+              prompt
           })
       }
     );
 
-  const bodyText =
+  const text =
     await response.text();
 
   if (
@@ -1552,7 +1577,7 @@ async function geminiRequest(
   ) {
     const error =
       new Error(
-        `Gemini HTTP ${response.status}: ${bodyText}`
+        `Gemini HTTP ${response.status}: ${text}`
       );
 
     error.status =
@@ -1561,55 +1586,61 @@ async function geminiRequest(
     throw error;
   }
 
-  const data =
-    JSON.parse(
-      bodyText
-    );
-
-  const parsed =
-    parseJsonText(
-      extractOutputText(
-        data
+  return parseJsonText(
+    extractOutputText(
+      JSON.parse(
+        text
       )
+    )
+  );
+}
+
+function sourcePacket(
+  insweek,
+  supplements
+) {
+  const result = [];
+
+  if (insweek) {
+    result.push(
+      `[보험신보]
+기사작성일: ${insweek.articleDate || ''}
+기사제목: ${insweek.title || ''}
+출시일: ${insweek.launchDate || '미확인'}
+출시근거: ${insweek.launchSentence || '미확인'}
+URL: ${insweek.url || ''}
+본문: ${clean(insweek.body).slice(0, MAX_SOURCE_TEXT)}`
     );
+  }
 
-  return {
-    ...parsed,
+  supplements.forEach(
+    (source, index) => {
+      result.push(
+        `[추가자료 ${index + 1}-${source.sourceType}]
+제목: ${source.title}
+페이지날짜: ${source.pageDate || '미확인'}
+출시일: ${source.launchDate || '미확인'}
+출시근거: ${source.launchSentence || '미확인'}
+URL: ${source.url}
+본문: ${clean(source.body).slice(0, MAX_SOURCE_TEXT)}`
+      );
+    }
+  );
 
-    sourceUrls:
-      extractSourceUrls(
-        data
-      )
-  };
+  return result.join(
+    '\n\n'
+  );
 }
 
 async function callGemini(
   target,
-  matchedArticle,
+  insweek,
+  supplements,
   targetMonth
 ) {
-  const insweekInfo =
-    matchedArticle
-      ? `
-[보험신보 확인자료]
-기사작성일: ${matchedArticle.articleDate || ''}
-기사제목: ${matchedArticle.title || ''}
-기사URL: ${matchedArticle.url || ''}
-본문에서 추출한 출시일: ${matchedArticle.launchDate || '미확인'}
-출시일 근거문장: ${matchedArticle.launchSentence || '미확인'}
-기사본문 일부:
-${clean(matchedArticle.body).slice(0, 6500)}
-`
-      : `
-[보험신보 확인자료]
-${targetMonth} 기사작성일 기준 보험신보 신상품 섹션에서 이 상품과 확실히 매칭되는 기사를 찾지 못했습니다.
-`;
-
-  const prompt = `
-당신은 한국 생명보험 상품동향 조사 담당자입니다.
-
-아래 상품은 생명보험협회 공시자료를 규칙 비교한 결과 AI 보완 대상으로 선정되었습니다.
-보험신보 신상품 섹션은 프로그램이 먼저 기사작성일 기준으로 직접 확인했습니다.
+  const prompt =
+`당신은 한국 생명보험 상품동향 조사 담당자입니다.
+인터넷 검색은 하지 말고 아래 수집자료만 근거로 판단하세요.
 
 [대상상품]
 조사월: ${targetMonth}
@@ -1617,53 +1648,37 @@ ${targetMonth} 기사작성일 기준 보험신보 신상품 섹션에서 이 �
 상품유형: ${target['상품유형'] || ''}
 상품군명: ${target['상품군명'] || ''}
 세부상품명: ${target['세부상품명'] || ''}
-생명보험협회 판매일자: ${target['판매일자'] || ''}
+협회 판매일자: ${target['판매일자'] || ''}
 규칙분류: ${target['규칙분류'] || ''}
 신규급부 후보: ${target['신규급부목록'] || ''}
-${insweekInfo}
 
-[추가검색]
-보험신보만으로 부족할 때에만 Google Search로 보완하세요.
+[수집자료]
+${sourcePacket(insweek, supplements) || '관련 외부자료 없음'}
 
-우선순위:
-1. 보험저널
-2. 해당 보험회사 공식 홈페이지·뉴스룸·보도자료·상품자료실
-3. 생명보험협회 등 공식 보험 관련 자료
-
-[중요]
-- 기사 작성월과 실제 출시월을 구분하세요.
-- 보험신보 기사가 ${targetMonth}에 작성됐더라도 실제 출시일이 다음달이면 그대로 표시하세요.
-- 협회 판매일자와 기사 출시일이 다르면 억지로 맞추지 마세요.
-- 신규상품, 신규급부·특약, 상품개정은 근거가 확인될 때만 판단하세요.
-- 자료가 부족하면 자료확인불가로 표시하세요.
-- 광고성 표현은 제거하세요.
+규칙:
+- 제공자료 밖의 사실을 추측하지 마세요.
+- 신규상품 / 신규급부·특약 / 상품개정은 근거가 있을 때만 판정하세요.
+- 근거가 약하면 자료확인불가로 표시하세요.
+- 기사작성일과 실제 출시일을 구분하세요.
 - 주요특징은 2문장 이내로 작성하세요.
 
-반드시 아래 JSON 하나만 출력하세요.
+반드시 JSON 하나만 출력하세요.
 
 {
-  "AI검증결과": "신규상품|신규급부·특약|상품개정|자료확인불가",
-  "AI신뢰도": "높음|보통|낮음",
-  "AI주요특징": "",
-  "AI신규급부특약": "",
-  "AI확인근거": "",
-  "AI출시일검증": "일치|일자불일치|출시일미확인"
-}
-`;
+  "AI검증결과":"신규상품|신규급부·특약|상품개정|자료확인불가",
+  "AI신뢰도":"높음|보통|낮음",
+  "AI주요특징":"",
+  "AI신규급부특약":"",
+  "AI확인근거":"",
+  "AI출시일검증":"일치|일자불일치|출시일미확인"
+}`;
 
   try {
-    return await geminiRequest(
+    return await geminiNoSearch(
       prompt
     );
 
   } catch (error) {
-    if (
-      error.status ===
-      429
-    ) {
-      throw error;
-    }
-
     if (
       [
         500,
@@ -1678,7 +1693,7 @@ ${insweekInfo}
         10000
       );
 
-      return await geminiRequest(
+      return geminiNoSearch(
         prompt
       );
     }
@@ -1686,10 +1701,6 @@ ${insweekInfo}
     throw error;
   }
 }
-
-// ============================================================
-// Drive API
-// ============================================================
 
 async function apiCall(
   payload
@@ -1788,10 +1799,6 @@ async function uploadFile(
   );
 }
 
-// ============================================================
-// 누적 DB 업데이트
-// ============================================================
-
 function updateDbAi(
   targetMonth,
   resultMap
@@ -1841,14 +1848,12 @@ function updateDbAi(
         )
       );
 
-    if (!result) {
-      continue;
+    if (result) {
+      Object.assign(
+        row,
+        result
+      );
     }
-
-    Object.assign(
-      row,
-      result
-    );
   }
 
   replaceSheet(
@@ -1862,10 +1867,6 @@ function updateDbAi(
     dbPath
   );
 }
-
-// ============================================================
-// 실행
-// ============================================================
 
 async function main() {
   const targetMonth =
@@ -1904,31 +1905,19 @@ async function main() {
       '상품목록'
     );
 
-  // ==========================================================
-  // AI 대상 = 고정 5개사 + Y + 신규상품/신규급부 후보
-  // ==========================================================
-
   const targets =
     familyRows.filter(
       row =>
-        row[
-          'AI대상여부'
-        ] ===
+        row['AI대상여부'] ===
           'Y' &&
-
         isAiTargetCompany(
-          row[
-            '보험회사명'
-          ]
+          row['보험회사명']
         ) &&
-
         [
           '신규상품후보',
           '신규급부·특약후보'
         ].includes(
-          row[
-            '규칙분류'
-          ]
+          row['규칙분류']
         )
     );
 
@@ -1944,251 +1933,419 @@ async function main() {
     `AI 대상: ${targets.length}개`
   );
 
-  // ==========================================================
-  // 1. 보험신보 기사작성일 기준 대상월 기사 수집
-  // ==========================================================
-
-  console.log('');
-
-  console.log(
-    '보험신보 신상품 섹션 수집 시작'
-  );
-
   const browser =
     await chromium.launch({
       headless: true
     });
 
-  let insweekArticles = [];
-
   try {
-    const listArticles =
-      await collectTargetMonthInsweekArticles(
+    const list =
+      await collectInsweek(
         browser,
         targetMonth
       );
 
-    console.log(
-      `보험신보 ${targetMonth} 기사작성일 기준: ${listArticles.length}건`
-    );
-
-    insweekArticles =
-      await enrichInsweekArticles(
+    const insweek =
+      await enrichInsweek(
         browser,
-        listArticles
+        list
       );
 
-  } finally {
-    await browser.close();
-  }
+    console.log(
+      `보험신보 ${targetMonth} 작성기사: ${insweek.length}건`
+    );
 
-  // ==========================================================
-  // 2. 보험신보기사 시트
-  // ==========================================================
-
-  const insweekSheetRows =
-    insweekArticles.map(
-      article => {
-        const company =
-          canonicalCompany(
-            article.company
-          );
-
-        const launchMonth =
-          article.launchDate
-            ? article.launchDate.slice(
-                0,
-                7
-              )
-            : '';
-
-        return {
-          기사작성월:
-            article.articleDate
-              ? article.articleDate.slice(
+    replaceSheet(
+      workbook,
+      '보험신보기사',
+      insweek.map(
+        article => {
+          const launchMonth =
+            article.launchDate
+              ? article.launchDate.slice(
                   0,
                   7
                 )
-              : '',
+              : '';
 
-          기사작성일:
-            article.articleDate ||
-            '',
+          return {
+            기사작성월:
+              article.articleDate
+                ? article.articleDate.slice(
+                    0,
+                    7
+                  )
+                : '',
 
-          보험회사명:
-            company ||
-            '',
+            기사작성일:
+              article.articleDate ||
+              '',
 
-          생보여부:
-            company &&
-            isLifeInsurer(
-              company
+            보험회사명:
+              canonicalCompany(
+                article.company
+              ),
+
+            기사제목:
+              article.title ||
+              '',
+
+            출시일:
+              article.launchDate ||
+              '',
+
+            출시월:
+              launchMonth,
+
+            대상월출시여부:
+              !launchMonth
+                ? '미확인'
+                : launchMonth ===
+                  targetMonth
+                ? 'Y'
+                : 'N',
+
+            출시근거문장:
+              article.launchSentence ||
+              '',
+
+            URL:
+              article.url ||
+              '',
+
+            수집상태:
+              article.error
+                ? `본문수집오류: ${article.error}`
+                : '정상'
+          };
+        }
+      )
+    );
+
+    const resultMap =
+      new Map();
+
+    const supplementRows =
+      [];
+
+    let matchedCount = 0;
+    let supplementCount = 0;
+    let aiCompleted = 0;
+    let quotaCount = 0;
+    let errorCount = 0;
+
+    for (
+      const target
+      of targets
+    ) {
+      const familyKey =
+        makeFamilyKey(
+          target
+        );
+
+      const ranked =
+        bestInsweek(
+          target,
+          insweek
+        );
+
+      const matched =
+        ranked
+          ? ranked.article
+          : null;
+
+      if (matched) {
+        matchedCount += 1;
+      }
+
+      const supplements =
+        await collectSupplements(
+          browser,
+          target,
+          targetMonth
+        );
+
+      if (
+        supplements.length
+      ) {
+        supplementCount += 1;
+      }
+
+      supplements.forEach(
+        source =>
+          supplementRows.push({
+            조사월:
+              targetMonth,
+
+            보험회사명:
+              canonicalCompany(
+                target[
+                  '보험회사명'
+                ]
+              ),
+
+            상품군명:
+              target[
+                '상품군명'
+              ] || '',
+
+            출처구분:
+              source.sourceType,
+
+            도메인:
+              source.domain,
+
+            추가검색제목:
+              source.title,
+
+            페이지날짜:
+              source.pageDate ||
+              '',
+
+            출시일:
+              source.launchDate ||
+              '',
+
+            추가검색근거:
+              source.launchSentence ||
+              '',
+
+            매칭점수:
+              source.score,
+
+            추가검색URL:
+              source.url
+          })
+      );
+
+      const launchMonth =
+        matched &&
+        matched.launchDate
+          ? matched.launchDate.slice(
+              0,
+              7
             )
-              ? 'Y'
-              : 'N',
+          : '';
 
-          기사제목:
-            article.title ||
-            '',
+      let result = {
+        보험신보매칭여부:
+          matched
+            ? 'Y'
+            : 'N',
 
-          출시일:
-            article.launchDate ||
-            '',
+        보험신보매칭점수:
+          ranked
+            ? ranked.score
+            : '',
 
-          출시월:
-            launchMonth,
+        보험신보기사작성일:
+          matched
+            ? matched.articleDate
+            : '',
 
-          대상월출시여부:
-            !launchMonth
+        보험신보기사제목:
+          matched
+            ? matched.title
+            : '',
+
+        보험신보출시일:
+          matched
+            ? matched.launchDate
+            : '',
+
+        보험신보출시월일치:
+          matched
+            ? !launchMonth
               ? '미확인'
               : launchMonth ===
                 targetMonth
               ? 'Y'
-              : 'N',
+              : 'N'
+            : '',
 
-          출시근거문장:
-            article.launchSentence ||
-            '',
+        보험신보출시근거:
+          matched
+            ? matched.launchSentence
+            : '',
 
-          URL:
-            article.url ||
-            '',
+        보험신보URL:
+          matched
+            ? matched.url
+            : '',
 
-          수집상태:
-            article.fetchError
-              ? `본문수집오류: ${article.fetchError}`
-              : '정상'
-        };
-      }
-    );
-
-  replaceSheet(
-    workbook,
-    '보험신보기사',
-    insweekSheetRows
-  );
-
-  // ==========================================================
-  // 3. AI 대상상품 ↔ 보험신보 기사 매칭
-  // ==========================================================
-
-  const resultMap =
-    new Map();
-
-  let insweekMatched = 0;
-  let aiCompleted = 0;
-  let quotaExceeded = 0;
-  let aiErrors = 0;
-
-  for (
-    const target
-    of targets
-  ) {
-    const familyKey =
-      makeFamilyKey(
-        target
-      );
-
-    const ranked =
-      findBestInsweekArticle(
-        target,
-        insweekArticles
-      );
-
-    const matched =
-      ranked
-        ? ranked.article
-        : null;
-
-    if (matched) {
-      insweekMatched += 1;
-    }
-
-    const launchMonth =
-      matched &&
-      matched.launchDate
-        ? matched.launchDate.slice(
-            0,
-            7
-          )
-        : '';
-
-    let result = {
-      보험신보매칭여부:
-        matched
-          ? 'Y'
-          : 'N',
-
-      보험신보매칭점수:
-        ranked
-          ? ranked.score
-          : '',
-
-      보험신보기사작성일:
-        matched
-          ? matched.articleDate
-          : '',
-
-      보험신보기사제목:
-        matched
-          ? matched.title
-          : '',
-
-      보험신보출시일:
-        matched
-          ? matched.launchDate
-          : '',
-
-      보험신보출시월일치:
-        matched
-          ? !launchMonth
-            ? '미확인'
-            : launchMonth ===
-              targetMonth
+        추가검색여부:
+          supplements.length
             ? 'Y'
-            : 'N'
-          : '',
+            : 'N',
 
-      보험신보출시근거:
-        matched
-          ? matched.launchSentence
-          : '',
+        추가검색출처:
+          [
+            ...new Set(
+              supplements.map(
+                x =>
+                  x.sourceType
+              )
+            )
+          ].join(' | '),
 
-      보험신보URL:
-        matched
-          ? matched.url
-          : '',
+        추가검색제목:
+          supplements
+            .map(
+              x =>
+                x.title
+            )
+            .join(' | '),
 
-      AI보완상태:
-        GEMINI_API_KEY
-          ? '대기'
-          : 'Gemini키없음',
+        추가검색URL:
+          supplements
+            .map(
+              x =>
+                x.url
+            )
+            .join('\n'),
 
-      AI검증결과: '',
+        AI보완상태:
+          GEMINI_API_KEY
+            ? '대기'
+            : 'Gemini키없음',
 
-      AI신뢰도: '',
+        AI검증결과: '',
+        AI신뢰도: '',
+        AI주요특징: '',
+        AI신규급부특약: '',
+        AI확인근거: '',
+        AI출시일검증: '',
+        AI출처URL: ''
+      };
 
-      AI주요특징: '',
+      if (
+        !GEMINI_API_KEY
+      ) {
+        result.AI보완상태 =
+          matched ||
+          supplements.length
+            ? '자료수집완료·AI미실행'
+            : '외부자료미확인·AI미실행';
 
-      AI신규급부특약: '',
+        Object.assign(
+          target,
+          result
+        );
 
-      AI확인근거: '',
+        resultMap.set(
+          familyKey,
+          result
+        );
 
-      AI출시일검증: '',
+        continue;
+      }
 
-      AI출처URL:
-        matched
-          ? matched.url
-          : ''
-    };
+      console.log(
+        `AI 요약: ${canonicalCompany(
+          target['보험회사명']
+        )} / ${target['상품군명']}`
+      );
 
-    if (
-      !GEMINI_API_KEY
-    ) {
-      result.AI보완상태 =
-        matched
-          ? '보험신보확인·AI미실행'
-          : 'AI미실행';
+      try {
+        const ai =
+          await callGemini(
+            target,
+            matched,
+            supplements,
+            targetMonth
+          );
+
+        const urls =
+          new Set();
+
+        if (
+          matched &&
+          matched.url
+        ) {
+          urls.add(
+            matched.url
+          );
+        }
+
+        supplements.forEach(
+          item => {
+            if (item.url) {
+              urls.add(
+                item.url
+              );
+            }
+          }
+        );
+
+        result = {
+          ...result,
+
+          AI보완상태:
+            '완료',
+
+          AI검증결과:
+            ai.AI검증결과 ||
+            '',
+
+          AI신뢰도:
+            ai.AI신뢰도 ||
+            '',
+
+          AI주요특징:
+            ai.AI주요특징 ||
+            '',
+
+          AI신규급부특약:
+            ai.AI신규급부특약 ||
+            '',
+
+          AI확인근거:
+            ai.AI확인근거 ||
+            '',
+
+          AI출시일검증:
+            ai.AI출시일검증 ||
+            '',
+
+          AI출처URL:
+            [
+              ...urls
+            ].join(
+              '\n'
+            )
+        };
+
+        aiCompleted += 1;
+
+      } catch (error) {
+        if (
+          error.status ===
+          429
+        ) {
+          result.AI보완상태 =
+            '자료수집완료·AI쿼터초과';
+
+          result.AI확인근거 =
+            'Gemini 일반 API 사용량 한도 초과. 직접 수집 자료는 유지함.';
+
+          quotaCount += 1;
+
+        } else {
+          result.AI보완상태 =
+            '자료수집완료·AI오류';
+
+          result.AI확인근거 =
+            String(
+              error.message ||
+              error
+            ).slice(
+              0,
+              600
+            );
+
+          errorCount += 1;
+        }
+      }
 
       Object.assign(
         target,
@@ -2200,548 +2357,328 @@ async function main() {
         result
       );
 
-      continue;
+      await sleep(
+        2500
+      );
+    }
+
+    replaceSheet(
+      workbook,
+      '추가검색자료',
+      supplementRows
+    );
+
+    for (
+      const row
+      of familyRows
+    ) {
+      const result =
+        resultMap.get(
+          makeFamilyKey(
+            row
+          )
+        );
+
+      if (result) {
+        Object.assign(
+          row,
+          result
+        );
+
+      } else if (
+        row[
+          'AI대상여부'
+        ] !== 'Y'
+      ) {
+        row[
+          'AI보완상태'
+        ] =
+          '비대상';
+      }
+    }
+
+    for (
+      const row
+      of productRows
+    ) {
+      const result =
+        resultMap.get(
+          makeFamilyKey(
+            row
+          )
+        );
+
+      if (result) {
+        Object.assign(
+          row,
+          result
+        );
+
+      } else if (
+        row[
+          'AI대상여부'
+        ] !== 'Y'
+      ) {
+        row[
+          'AI보완상태'
+        ] =
+          '비대상';
+      }
+    }
+
+    replaceSheet(
+      workbook,
+      '상품군목록',
+      familyRows
+    );
+
+    replaceSheet(
+      workbook,
+      '상품목록',
+      productRows
+    );
+
+    replaceSheet(
+      workbook,
+      'AI분석대상',
+      familyRows
+        .filter(
+          row =>
+            row[
+              'AI대상여부'
+            ] === 'Y'
+        )
+        .map(
+          row => ({
+            조사월:
+              row['조사월'],
+
+            보험회사명:
+              canonicalCompany(
+                row[
+                  '보험회사명'
+                ]
+              ),
+
+            상품유형:
+              row[
+                '상품유형'
+              ],
+
+            상품군명:
+              row[
+                '상품군명'
+              ],
+
+            판매일자:
+              row[
+                '판매일자'
+              ],
+
+            세부상품명:
+              row[
+                '세부상품명'
+              ],
+
+            규칙분류:
+              row[
+                '규칙분류'
+              ],
+
+            신규급부목록:
+              row[
+                '신규급부목록'
+              ],
+
+            보험신보매칭여부:
+              row[
+                '보험신보매칭여부'
+              ] || '',
+
+            보험신보기사작성일:
+              row[
+                '보험신보기사작성일'
+              ] || '',
+
+            보험신보기사제목:
+              row[
+                '보험신보기사제목'
+              ] || '',
+
+            보험신보출시일:
+              row[
+                '보험신보출시일'
+              ] || '',
+
+            보험신보출시월일치:
+              row[
+                '보험신보출시월일치'
+              ] || '',
+
+            보험신보URL:
+              row[
+                '보험신보URL'
+              ] || '',
+
+            추가검색여부:
+              row[
+                '추가검색여부'
+              ] || '',
+
+            추가검색출처:
+              row[
+                '추가검색출처'
+              ] || '',
+
+            추가검색제목:
+              row[
+                '추가검색제목'
+              ] || '',
+
+            추가검색URL:
+              row[
+                '추가검색URL'
+              ] || '',
+
+            AI보완상태:
+              row[
+                'AI보완상태'
+              ] || '',
+
+            AI검증결과:
+              row[
+                'AI검증결과'
+              ] || '',
+
+            AI신뢰도:
+              row[
+                'AI신뢰도'
+              ] || '',
+
+            AI주요특징:
+              row[
+                'AI주요특징'
+              ] || '',
+
+            AI신규급부특약:
+              row[
+                'AI신규급부특약'
+              ] || '',
+
+            AI출시일검증:
+              row[
+                'AI출시일검증'
+              ] || '',
+
+            AI확인근거:
+              row[
+                'AI확인근거'
+              ] || '',
+
+            AI출처URL:
+              row[
+                'AI출처URL'
+              ] || ''
+          })
+        )
+    );
+
+    replaceSheet(
+      workbook,
+      'AI분류요약',
+      [
+        {
+          구분:
+            '전체 상품군',
+          건수:
+            familyRows.length
+        },
+        {
+          구분:
+            'AI 대상 상품군',
+          건수:
+            targets.length
+        },
+        {
+          구분:
+            '보험신보 대상월 작성기사',
+          건수:
+            insweek.length
+        },
+        {
+          구분:
+            'AI대상 중 보험신보 기사매칭',
+          건수:
+            matchedCount
+        },
+        {
+          구분:
+            '보험저널/보험사 공식자료 추가확인 상품',
+          건수:
+            supplementCount
+        },
+        {
+          구분:
+            'AI 보완 완료',
+          건수:
+            aiCompleted
+        },
+        {
+          구분:
+            'AI 쿼터초과',
+          건수:
+            quotaCount
+        },
+        {
+          구분:
+            'AI 오류',
+          건수:
+            errorCount
+        }
+      ]
+    );
+
+    XLSX.writeFile(
+      workbook,
+      monthlyPath
+    );
+
+    updateDbAi(
+      targetMonth,
+      resultMap
+    );
+
+    await uploadFile(
+      monthlyPath,
+      path.basename(
+        monthlyPath
+      )
+    );
+
+    const dbPath =
+      path.join(
+        OUTPUT_DIR,
+        DB_FILE_NAME
+      );
+
+    if (
+      fs.existsSync(
+        dbPath
+      )
+    ) {
+      await uploadFile(
+        dbPath,
+        DB_FILE_NAME
+      );
     }
 
     console.log(
-      `AI 보완: ${canonicalCompany(
-        target['보험회사명']
-      )} / ${target['상품군명']}`
+      `완료 - AI대상 ${targets.length}, 보험신보매칭 ${matchedCount}, 추가자료 ${supplementCount}, AI완료 ${aiCompleted}, 쿼터초과 ${quotaCount}, 오류 ${errorCount}`
     );
 
-    try {
-      const ai =
-        await callGemini(
-          target,
-          matched,
-          targetMonth
-        );
-
-      const sourceUrls =
-        new Set();
-
-      if (
-        matched &&
-        matched.url
-      ) {
-        sourceUrls.add(
-          matched.url
-        );
-      }
-
-      for (
-        const url
-        of ai.sourceUrls ||
-        []
-      ) {
-        sourceUrls.add(
-          url
-        );
-      }
-
-      result = {
-        ...result,
-
-        AI보완상태:
-          '완료',
-
-        AI검증결과:
-          ai.AI검증결과 ||
-          '',
-
-        AI신뢰도:
-          ai.AI신뢰도 ||
-          '',
-
-        AI주요특징:
-          ai.AI주요특징 ||
-          '',
-
-        AI신규급부특약:
-          ai.AI신규급부특약 ||
-          '',
-
-        AI확인근거:
-          ai.AI확인근거 ||
-          '',
-
-        AI출시일검증:
-          ai.AI출시일검증 ||
-          '',
-
-        AI출처URL:
-          [
-            ...sourceUrls
-          ].join(
-            '\n'
-          )
-      };
-
-      aiCompleted += 1;
-
-    } catch (error) {
-      if (
-        error.status ===
-        429
-      ) {
-        result = {
-          ...result,
-
-          AI보완상태:
-            matched
-              ? '보험신보확인·AI쿼터초과'
-              : 'AI쿼터초과',
-
-          AI확인근거:
-            'Gemini API 사용량 한도 초과. 규칙분류와 보험신보 수집결과는 유지함.'
-        };
-
-        quotaExceeded += 1;
-
-      } else {
-        result = {
-          ...result,
-
-          AI보완상태:
-            matched
-              ? '보험신보확인·AI오류'
-              : 'AI오류',
-
-          AI확인근거:
-            String(
-              error.message ||
-              error
-            ).slice(
-              0,
-              600
-            )
-        };
-
-        aiErrors += 1;
-      }
-    }
-
-    Object.assign(
-      target,
-      result
-    );
-
-    resultMap.set(
-      familyKey,
-      result
-    );
-
-    await sleep(
-      4000
-    );
+  } finally {
+    await browser.close();
   }
-
-  // ==========================================================
-  // 4. 상품군목록 반영
-  // ==========================================================
-
-  for (
-    const row
-    of familyRows
-  ) {
-    const result =
-      resultMap.get(
-        makeFamilyKey(
-          row
-        )
-      );
-
-    if (result) {
-      Object.assign(
-        row,
-        result
-      );
-
-    } else if (
-      row[
-        'AI대상여부'
-      ] !==
-      'Y'
-    ) {
-      row[
-        'AI보완상태'
-      ] =
-        '비대상';
-    }
-  }
-
-  replaceSheet(
-    workbook,
-    '상품군목록',
-    familyRows
-  );
-
-  // ==========================================================
-  // 5. 상품목록에도 결과 반영
-  // ==========================================================
-
-  for (
-    const row
-    of productRows
-  ) {
-    const result =
-      resultMap.get(
-        makeFamilyKey(
-          row
-        )
-      );
-
-    if (result) {
-      Object.assign(
-        row,
-        result
-      );
-
-    } else if (
-      row[
-        'AI대상여부'
-      ] !==
-      'Y'
-    ) {
-      row[
-        'AI보완상태'
-      ] =
-        '비대상';
-    }
-  }
-
-  replaceSheet(
-    workbook,
-    '상품목록',
-    productRows
-  );
-
-  // ==========================================================
-  // 6. AI분석대상 시트 최신화
-  // ==========================================================
-
-  const aiTargetRows =
-    familyRows
-      .filter(
-        row =>
-          row[
-            'AI대상여부'
-          ] ===
-          'Y'
-      )
-      .map(
-        row => ({
-          조사월:
-            row['조사월'],
-
-          보험회사명:
-            canonicalCompany(
-              row[
-                '보험회사명'
-              ]
-            ),
-
-          상품유형:
-            row[
-              '상품유형'
-            ],
-
-          상품군명:
-            row[
-              '상품군명'
-            ],
-
-          판매일자:
-            row[
-              '판매일자'
-            ],
-
-          세부상품명:
-            row[
-              '세부상품명'
-            ],
-
-          규칙분류:
-            row[
-              '규칙분류'
-            ],
-
-          신규급부목록:
-            row[
-              '신규급부목록'
-            ],
-
-          보험신보매칭여부:
-            row[
-              '보험신보매칭여부'
-            ] || '',
-
-          보험신보기사작성일:
-            row[
-              '보험신보기사작성일'
-            ] || '',
-
-          보험신보기사제목:
-            row[
-              '보험신보기사제목'
-            ] || '',
-
-          보험신보출시일:
-            row[
-              '보험신보출시일'
-            ] || '',
-
-          보험신보출시월일치:
-            row[
-              '보험신보출시월일치'
-            ] || '',
-
-          보험신보출시근거:
-            row[
-              '보험신보출시근거'
-            ] || '',
-
-          보험신보URL:
-            row[
-              '보험신보URL'
-            ] || '',
-
-          AI보완상태:
-            row[
-              'AI보완상태'
-            ] || '',
-
-          AI검증결과:
-            row[
-              'AI검증결과'
-            ] || '',
-
-          AI신뢰도:
-            row[
-              'AI신뢰도'
-            ] || '',
-
-          AI주요특징:
-            row[
-              'AI주요특징'
-            ] || '',
-
-          AI신규급부특약:
-            row[
-              'AI신규급부특약'
-            ] || '',
-
-          AI출시일검증:
-            row[
-              'AI출시일검증'
-            ] || '',
-
-          AI확인근거:
-            row[
-              'AI확인근거'
-            ] || '',
-
-          AI출처URL:
-            row[
-              'AI출처URL'
-            ] || ''
-        })
-      );
-
-  replaceSheet(
-    workbook,
-    'AI분석대상',
-    aiTargetRows
-  );
-
-  // ==========================================================
-  // 7. AI분류요약 시트
-  // ==========================================================
-
-  const lifeNewsCount =
-    insweekSheetRows
-      .filter(
-        row =>
-          row[
-            '생보여부'
-          ] ===
-          'Y'
-      )
-      .length;
-
-  const lifeNewsTargetLaunchCount =
-    insweekSheetRows
-      .filter(
-        row =>
-          row[
-            '생보여부'
-          ] ===
-            'Y' &&
-          row[
-            '대상월출시여부'
-          ] ===
-            'Y'
-      )
-      .length;
-
-  const summaryRows = [
-    {
-      구분:
-        '전체 상품군',
-
-      건수:
-        familyRows.length
-    },
-
-    {
-      구분:
-        'AI 대상 상품군',
-
-      건수:
-        targets.length
-    },
-
-    {
-      구분:
-        '보험신보 대상월 작성기사',
-
-      건수:
-        insweekArticles.length
-    },
-
-    {
-      구분:
-        '보험신보 대상월 생보기사',
-
-      건수:
-        lifeNewsCount
-    },
-
-    {
-      구분:
-        '보험신보 생보기사 중 대상월 출시확인',
-
-      건수:
-        lifeNewsTargetLaunchCount
-    },
-
-    {
-      구분:
-        'AI대상 중 보험신보 기사매칭',
-
-      건수:
-        insweekMatched
-    },
-
-    {
-      구분:
-        'AI 보완 완료',
-
-      건수:
-        aiCompleted
-    },
-
-    {
-      구분:
-        'AI 쿼터초과',
-
-      건수:
-        quotaExceeded
-    },
-
-    {
-      구분:
-        'AI 오류',
-
-      건수:
-        aiErrors
-    }
-  ];
-
-  replaceSheet(
-    workbook,
-    'AI분류요약',
-    summaryRows
-  );
-
-  // ==========================================================
-  // 8. 저장 + 누적DB + Drive
-  // ==========================================================
-
-  XLSX.writeFile(
-    workbook,
-    monthlyPath
-  );
-
-  updateDbAi(
-    targetMonth,
-    resultMap
-  );
-
-  await uploadFile(
-    monthlyPath,
-    path.basename(
-      monthlyPath
-    )
-  );
-
-  const dbPath =
-    path.join(
-      OUTPUT_DIR,
-      DB_FILE_NAME
-    );
-
-  if (
-    fs.existsSync(
-      dbPath
-    )
-  ) {
-    await uploadFile(
-      dbPath,
-      DB_FILE_NAME
-    );
-  }
-
-  console.log('');
-  console.log(
-    '============================'
-  );
-
-  console.log(
-    `보험신보 ${targetMonth} 작성기사: ${insweekArticles.length}건`
-  );
-
-  console.log(
-    `보험신보 생보기사: ${lifeNewsCount}건`
-  );
-
-  console.log(
-    `AI 대상: ${targets.length}개`
-  );
-
-  console.log(
-    `보험신보 매칭: ${insweekMatched}개`
-  );
-
-  console.log(
-    `AI 완료: ${aiCompleted}개`
-  );
-
-  console.log(
-    `AI 쿼터초과: ${quotaExceeded}개`
-  );
-
-  console.log(
-    `AI 오류: ${aiErrors}개`
-  );
-
-  console.log(
-    '============================'
-  );
-
-  console.log(
-    '보험신보 기사수집 + 선택적 AI 보완 완료'
-  );
 }
 
 main().catch(
