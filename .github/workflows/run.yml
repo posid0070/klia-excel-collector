@@ -61,7 +61,12 @@ jobs:
 
         run: node process_upload.js
 
-
+      - name: Build cumulative product DB
+        env:
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
+          TARGET_MONTH: ${{ github.event.inputs.target_month }}
+        run: node build_db.js
       - name: Save run artifacts
         if: always()
 
