@@ -3,14 +3,20 @@ const fs = require('fs');
 const path = require('path');
 
 const OUTPUT_DIR =
-  path.join(__dirname, 'output');
+  path.join(
+    __dirname,
+    'output'
+  );
+
+const DB_FILE_NAME =
+  '생보협회_상품DB.xlsx';
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY;
 
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
-  'gemini-3.5-flash-lite';
+  'gemini-2.5-flash-lite';
 
 const UPLOAD_URL =
   process.env.UPLOAD_URL;
@@ -24,58 +30,70 @@ const TARGET_MONTH_OVERRIDE =
   ).trim();
 
 
-function sleep(ms) {
-  return new Promise(
-    resolve =>
-      setTimeout(resolve, ms)
-  );
+const AI_TARGET_COMPANIES = [
+  '삼성생명',
+  '한화생명',
+  '교보생명',
+  '신한라이프',
+  'NH농협생명'
+];
+
+
+// ============================================================
+// 기본
+// ============================================================
+
+function clean(value) {
+  return String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
+function norm(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(
+      /[\s\(\)\[\]\{\}·ㆍ\-_,.\/\\:：'"]/g,
+      ''
+    );
 }
 
 
 function getTargetMonth() {
 
   if (TARGET_MONTH_OVERRIDE) {
-
-    if (
-      !/^\d{4}-\d{2}$/.test(
-        TARGET_MONTH_OVERRIDE
-      )
-    ) {
-      throw new Error(
-        'TARGET_MONTH는 YYYY-MM 형식이어야 합니다.'
-      );
-    }
-
     return TARGET_MONTH_OVERRIDE;
   }
 
-
   const parts =
-    Object.fromEntries(
+    new Intl.DateTimeFormat(
+      'en-US',
+      {
+        timeZone:
+          'Asia/Seoul',
 
-      new Intl.DateTimeFormat(
-        'en-US',
-        {
-          timeZone:
-            'Asia/Seoul',
+        year:
+          'numeric',
 
-          year:
-            'numeric',
-
-          month:
-            '2-digit'
-        }
+        month:
+          '2-digit'
+      }
+    )
+      .formatToParts(
+        new Date()
       )
-        .formatToParts(
-          new Date()
-        )
-        .map(
-          item => [
-            item.type,
-            item.value
-          ]
-        )
-    );
+      .reduce(
+        (acc, p) => {
+
+          acc[p.type] =
+            p.value;
+
+          return acc;
+        },
+        {}
+      );
 
 
   let year =
@@ -93,386 +111,115 @@ function getTargetMonth() {
 
   return (
     `${year}-` +
-    `${String(month).padStart(2, '0')}`
+    String(month)
+      .padStart(2, '0')
   );
 }
 
 
-function extractInteractionText(data) {
+function canonicalCompany(value) {
+
+  const s =
+    norm(value);
 
   if (
-    data.output_text &&
-    typeof data.output_text === 'string'
+    s.includes(
+      '삼성생명'
+    )
   ) {
-    return data.output_text;
+    return '삼성생명';
   }
-
-
-  const texts = [];
-
-
-  for (
-    const step of
-    data.steps || []
-  ) {
-
-    if (
-      step.type !==
-      'model_output'
-    ) {
-      continue;
-    }
-
-
-    for (
-      const content of
-      step.content || []
-    ) {
-
-      if (
-        content.type === 'text' &&
-        content.text
-      ) {
-
-        texts.push(
-          content.text
-        );
-      }
-    }
-  }
-
-
-  return texts.join('\n');
-}
-
-
-function cleanJsonText(text) {
-
-  let cleaned =
-    String(text || '')
-      .trim();
-
-
-  cleaned =
-    cleaned
-      .replace(
-        /^```json\s*/i,
-        ''
-      )
-      .replace(
-        /^```\s*/i,
-        ''
-      )
-      .replace(
-        /```$/i,
-        ''
-      )
-      .trim();
-
-
-  const start =
-    cleaned.indexOf('[');
-
-  const end =
-    cleaned.lastIndexOf(']');
-
 
   if (
-    start >= 0 &&
-    end > start
+    s.includes(
+      '한화생명'
+    )
   ) {
-
-    cleaned =
-      cleaned.slice(
-        start,
-        end + 1
-      );
+    return '한화생명';
   }
 
-
-  return cleaned;
-}
-
-
-async function callGemini(
-  prompt
-) {
-
-  if (!GEMINI_API_KEY) {
-
-    throw new Error(
-      'GEMINI_API_KEY가 없습니다.'
-    );
-  }
-
-
-  const url =
-    'https://generativelanguage.googleapis.com/v1beta/interactions';
-
-
-  const body = {
-
-    model:
-      GEMINI_MODEL,
-
-    input:
-      prompt,
-
-    tools: [
-      {
-        type:
-          'google_search'
-      }
-    ]
-  };
-
-
-  let lastError;
-
-
-  for (
-    let attempt = 1;
-    attempt <= 4;
-    attempt++
+  if (
+    s.includes(
+      '교보생명'
+    )
   ) {
-
-    try {
-
-      const response =
-        await fetch(
-          url,
-          {
-            method:
-              'POST',
-
-            headers: {
-
-              'Content-Type':
-                'application/json',
-
-              'x-goog-api-key':
-                GEMINI_API_KEY,
-
-              'Api-Revision':
-                '2026-05-20'
-            },
-
-            body:
-              JSON.stringify(
-                body
-              )
-          }
-        );
-
-
-      const text =
-        await response.text();
-
-
-      if (
-        response.status === 429 ||
-        response.status === 503
-      ) {
-
-        lastError =
-          new Error(
-            `Gemini HTTP ${response.status}: ${text.slice(0, 500)}`
-          );
-
-
-        await sleep(
-          5000 * attempt
-        );
-
-        continue;
-      }
-
-
-      if (!response.ok) {
-
-        throw new Error(
-          `Gemini HTTP ${response.status}: ` +
-          text.slice(
-            0,
-            1000
-          )
-        );
-      }
-
-
-      const data =
-        JSON.parse(text);
-
-
-      const output =
-        extractInteractionText(
-          data
-        );
-
-
-      if (!output) {
-
-        throw new Error(
-          'Gemini 출력 텍스트가 없습니다.'
-        );
-      }
-
-
-      return {
-        output,
-        raw: data
-      };
-
-
-    } catch (error) {
-
-      lastError =
-        error;
-
-
-      if (
-        attempt < 4
-      ) {
-
-        await sleep(
-          5000 * attempt
-        );
-      }
-    }
+    return '교보생명';
   }
 
+  if (
+    s.includes(
+      '신한라이프'
+    ) ||
+    s.includes(
+      '신한생명'
+    )
+  ) {
+    return '신한라이프';
+  }
 
-  throw lastError;
+  if (
+    s.includes(
+      'nh농협생명'
+    ) ||
+    s.includes(
+      '농협생명'
+    )
+  ) {
+    return 'NH농협생명';
+  }
+
+  return clean(value);
 }
 
 
-function makePrompt(
-  targetMonth,
-  category,
-  rows
-) {
+function isTargetCompany(value) {
 
-  const items =
-    rows.map(
-      (row, index) => ({
-
-        key:
-          String(index + 1),
-
-        보험회사명:
-          row['보험회사명'],
-
-        상품유형:
-          row['상품유형'],
-
-        상품군명:
-          row['상품군명'],
-
-        세부상품명:
-          row['세부상품명'],
-
-        판매일자:
-          row['판매일자'],
-
-        기존비교상태:
-          row['비교상태']
-      })
+  return AI_TARGET_COMPANIES
+    .includes(
+      canonicalCompany(value)
     );
-
-
-  return `
-당신은 대한민국 생명보험 신상품 조사 분석 담당자입니다.
-
-조사월은 ${targetMonth}입니다.
-상품유형은 ${category}입니다.
-
-아래 상품들은 생명보험협회 상품비교공시에서
-판매일자가 ${targetMonth}에 해당하는 것으로 이미 확인된 상품입니다.
-
-각 상품에 대해 Google Search를 활용하여
-보험회사 공식 홈페이지·보도자료·상품자료,
-생명보험협회,
-보험신보,
-보험저널 등 신뢰할 수 있는 공개자료를 확인하십시오.
-
-반드시 다음 기준으로 분류하십시오.
-
-[분류값]
-1. 신규상품
-- 해당 판매일자 전후에 새 상품 출시 또는 판매개시로 확인되는 경우
-- 단순 상품명 버전 변경이나 개정은 신규상품으로 보지 않음
-
-2. 상품개정
-- 기존 상품의 보장 확대·가입범위 변경·상품구조 변경·갱신 등의 개정
-- 2609 → 2610 등의 버전 변경
-- 기존 상품 리뉴얼도 여기에 포함
-
-3. 신규담보·특약
-- 기존 상품 자체가 새 상품은 아니지만
-  새로운 특약·보장·급부가 추가된 사실이 확인되는 경우
-
-4. 확인필요
-- 검색해도 신규/개정 여부를 객관적으로 확인하기 어려운 경우
-- 추측하지 말 것
-
-[중요 규칙]
-
-- 생명보험협회의 판매일자는 이미 검증되었으므로 날짜를 임의 수정하지 마십시오.
-- 기사 작성일이 아니라 실제 판매개시/상품개정 사실을 기준으로 판단하십시오.
-- 같은 상품의 형·종·버전 차이를 무조건 신규상품으로 세지 마십시오.
-- 근거가 약하면 반드시 확인필요로 분류하십시오.
-- 공식자료를 우선하십시오.
-- 허위 URL을 만들지 마십시오.
-
-각 상품마다 다음 항목을 반환하십시오.
-
-key
-최종분류
-신뢰도
-주요특징
-분류근거
-출처URL
-
-신뢰도는
-높음 / 보통 / 낮음
-중 하나입니다.
-
-출처URL은 실제 검색으로 확인한 URL을 최대 3개까지 배열로 반환하십시오.
-
-반드시 아래와 같은 JSON 배열만 출력하십시오.
-설명문, 마크다운, 코드블록을 붙이지 마십시오.
-
-[
-  {
-    "key":"1",
-    "최종분류":"신규상품",
-    "신뢰도":"높음",
-    "주요특징":"...",
-    "분류근거":"...",
-    "출처URL":[
-      "https://..."
-    ]
-  }
-]
-
-분석 대상:
-
-${JSON.stringify(
-  items,
-  null,
-  2
-)}
-`;
 }
 
 
-function worksheetToRows(
-  worksheet
+function makeFamilyKey(row) {
+
+  return [
+    norm(
+      row['보험구분']
+    ),
+
+    norm(
+      row['상품유형']
+    ),
+
+    norm(
+      canonicalCompany(
+        row['보험회사명']
+      )
+    ),
+
+    norm(
+      row['상품군명']
+    )
+  ].join('|');
+}
+
+
+function sheetRows(
+  workbook,
+  name
 ) {
+
+  const sheet =
+    workbook.Sheets[name];
+
+  if (!sheet) {
+    return [];
+  }
 
   return XLSX.utils
     .sheet_to_json(
-      worksheet,
+      sheet,
       {
         defval: ''
       }
@@ -483,152 +230,79 @@ function worksheetToRows(
 function replaceSheet(
   workbook,
   sheetName,
-  rows,
-  headers
+  rows
 ) {
 
-  const aoa = [
-
-    headers,
-
-    ...rows.map(
-      row =>
-        headers.map(
-          h =>
-            row[h] ?? ''
-        )
-    )
-  ];
-
-
-  const sheet =
-    XLSX.utils
-      .aoa_to_sheet(
-        aoa
+  const index =
+    workbook.SheetNames
+      .indexOf(
+        sheetName
       );
 
+  if (index >= 0) {
 
-  sheet['!autofilter'] = {
-
-    ref:
-      XLSX.utils
-        .encode_range({
-
-          s: {
-            r: 0,
-            c: 0
-          },
-
-          e: {
-            r:
-              rows.length,
-
-            c:
-              headers.length - 1
-          }
-        })
-  };
-
-
-  sheet['!cols'] =
-    headers.map(
-      h => {
-
-        if (
-          h === '상품명' ||
-          h === '상품군명' ||
-          h === '세부상품명'
-        ) {
-          return {
-            wch: 42
-          };
-        }
-
-        if (
-          h === '주요특징' ||
-          h === '분류근거'
-        ) {
-          return {
-            wch: 55
-          };
-        }
-
-        if (
-          h === '출처URL'
-        ) {
-          return {
-            wch: 65
-          };
-        }
-
-        return {
-          wch: 18
-        };
-      }
-    );
-
-
-  if (
-    workbook.Sheets[
-      sheetName
-    ]
-  ) {
+    workbook.SheetNames
+      .splice(
+        index,
+        1
+      );
 
     delete workbook
       .Sheets[
         sheetName
       ];
-
-
-    workbook.SheetNames =
-      workbook
-        .SheetNames
-        .filter(
-          name =>
-            name !==
-            sheetName
-        );
   }
 
 
-  workbook.SheetNames
-    .push(
+  const sheet =
+    XLSX.utils
+      .json_to_sheet(
+        rows
+      );
+
+
+  if (
+    rows.length > 0
+  ) {
+
+    const headers =
+      Object.keys(
+        rows[0]
+      );
+
+    sheet['!autofilter'] = {
+      ref:
+        XLSX.utils
+          .encode_range({
+            s: {
+              r: 0,
+              c: 0
+            },
+            e: {
+              r: rows.length,
+              c:
+                headers.length -
+                1
+            }
+          })
+    };
+  }
+
+
+  XLSX.utils
+    .book_append_sheet(
+      workbook,
+      sheet,
       sheetName
     );
-
-
-  workbook.Sheets[
-    sheetName
-  ] =
-    sheet;
 }
 
 
-async function apiUpload(
-  filePath,
-  fileName
-) {
+// ============================================================
+// Drive
+// ============================================================
 
-  if (
-    !UPLOAD_URL ||
-    !UPLOAD_SECRET
-  ) {
-
-    throw new Error(
-      'UPLOAD_URL 또는 UPLOAD_SECRET이 없습니다.'
-    );
-  }
-
-
-  const base64 =
-    fs
-      .readFileSync(
-        filePath
-      )
-      .toString(
-        'base64'
-      );
-
+async function apiCall(payload) {
 
   const response =
     await fetch(
@@ -644,22 +318,10 @@ async function apiUpload(
 
         body:
           JSON.stringify({
-
             secret:
               UPLOAD_SECRET,
 
-            action:
-              'upload',
-
-            folderType:
-              'merged',
-
-            fileName,
-
-            mimeType:
-              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-
-            base64
+            ...payload
           })
       }
     );
@@ -669,44 +331,489 @@ async function apiUpload(
     await response.text();
 
 
-  let data;
+  let result;
 
 
   try {
-    data =
+
+    result =
       JSON.parse(text);
 
   } catch {
 
     throw new Error(
-      'Drive 업로드 응답 오류: ' +
-      text.slice(0, 500)
+      'Apps Script 응답 오류: ' +
+      text.slice(
+        0,
+        300
+      )
     );
   }
 
 
   if (
     !response.ok ||
-    !data.ok
+    !result.ok
   ) {
 
     throw new Error(
-      data.error ||
-      `Drive 업로드 HTTP ${response.status}`
+      result.error ||
+      `HTTP ${response.status}`
     );
   }
+
+
+  return result;
 }
 
 
-async function main() {
+async function uploadFile(
+  filePath,
+  fileName
+) {
 
-  const targetMonth =
-    getTargetMonth();
+  const base64 =
+    fs.readFileSync(
+      filePath
+    )
+      .toString(
+        'base64'
+      );
+
+
+  await apiCall({
+    action:
+      'upload',
+
+    folderType:
+      'merged',
+
+    fileName,
+
+    mimeType:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+
+    base64
+  });
 
 
   console.log(
-    `AI 분석 조사월: ${targetMonth}`
+    `Drive 저장 완료: ${fileName}`
   );
+}
+
+
+// ============================================================
+// Gemini 결과 추출
+// ============================================================
+
+function extractOutputText(
+  data
+) {
+
+  if (
+    typeof data.output_text ===
+      'string' &&
+    data.output_text.trim()
+  ) {
+
+    return data.output_text
+      .trim();
+  }
+
+
+  if (
+    Array.isArray(
+      data.steps
+    )
+  ) {
+
+    const texts = [];
+
+
+    for (
+      const step of data.steps
+    ) {
+
+      if (
+        step.type !==
+        'model_output'
+      ) {
+        continue;
+      }
+
+
+      for (
+        const part
+        of step.content || []
+      ) {
+
+        if (
+          part.type ===
+            'text' &&
+          part.text
+        ) {
+
+          texts.push(
+            part.text
+          );
+        }
+      }
+    }
+
+
+    return texts.join(
+      '\n'
+    );
+  }
+
+
+  return '';
+}
+
+
+function extractSourceUrls(
+  data
+) {
+
+  const urls =
+    new Set();
+
+
+  if (
+    !Array.isArray(
+      data.steps
+    )
+  ) {
+
+    return [];
+  }
+
+
+  for (
+    const step of data.steps
+  ) {
+
+    for (
+      const part
+      of step.content || []
+    ) {
+
+      for (
+        const ann
+        of part.annotations || []
+      ) {
+
+        if (
+          ann.type ===
+            'url_citation' &&
+          ann.url
+        ) {
+
+          urls.add(
+            ann.url
+          );
+        }
+      }
+    }
+  }
+
+
+  return [...urls];
+}
+
+
+function parseJsonText(text) {
+
+  let s =
+    String(text || '')
+      .trim();
+
+
+  s =
+    s.replace(
+      /^```json\s*/i,
+      ''
+    );
+
+
+  s =
+    s.replace(
+      /^```\s*/,
+      ''
+    );
+
+
+  s =
+    s.replace(
+      /\s*```$/,
+      ''
+    );
+
+
+  const first =
+    s.indexOf('{');
+
+  const last =
+    s.lastIndexOf('}');
+
+
+  if (
+    first < 0 ||
+    last < first
+  ) {
+
+    throw new Error(
+      'JSON 응답을 찾을 수 없습니다.'
+    );
+  }
+
+
+  return JSON.parse(
+    s.slice(
+      first,
+      last + 1
+    )
+  );
+}
+
+
+// ============================================================
+// Gemini 호출
+// ============================================================
+
+async function callGemini(
+  row
+) {
+
+  const prompt = `
+당신은 한국 생명보험 상품동향 조사 담당자입니다.
+
+아래 상품은 생명보험협회 공시자료를 먼저 분석한 결과,
+신규상품 또는 신규급부·특약 후보로 선별된 상품입니다.
+
+[조사대상]
+조사월: ${row['조사월']}
+보험회사: ${canonicalCompany(row['보험회사명'])}
+상품유형: ${row['상품유형']}
+상품군명: ${row['상품군명']}
+세부상품명: ${row['세부상품명'] || ''}
+규칙분류: ${row['규칙분류']}
+신규급부 후보: ${row['신규급부목록'] || ''}
+
+웹 검색으로 아래 자료를 우선 확인하세요.
+
+1. 해당 보험회사 공식 홈페이지의 보도자료·뉴스룸·상품자료실
+2. 보험신보
+3. 보험저널
+4. 생명보험협회 등 공식 보험 관련 자료
+
+주의사항:
+- 판매일자는 생명보험협회 공시에서 이미 확인했으므로 판매일자를 추측하지 마세요.
+- 기사 제목만 보고 판단하지 마세요.
+- 실제 신규 출시인지, 기존 상품 개정인지, 신규 급부·특약 추가인지 근거를 확인하세요.
+- 자료가 없으면 억지로 판단하지 마세요.
+- 광고성 표현은 제거하세요.
+- 주요특징은 2문장 이내로 작성하세요.
+
+반드시 아래 JSON 하나만 출력하세요.
+
+{
+  "AI검증결과": "신규상품|신규급부·특약|상품개정|자료확인불가",
+  "AI신뢰도": "높음|보통|낮음",
+  "주요특징": "",
+  "확인근거": ""
+}
+`;
+
+
+  const response =
+    await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/interactions',
+      {
+        method:
+          'POST',
+
+        headers: {
+          'x-goog-api-key':
+            GEMINI_API_KEY,
+
+          'Content-Type':
+            'application/json',
+
+          'Api-Revision':
+            '2026-05-20'
+        },
+
+        body:
+          JSON.stringify({
+            model:
+              GEMINI_MODEL,
+
+            input:
+              prompt,
+
+            tools: [
+              {
+                type:
+                  'google_search'
+              }
+            ]
+          })
+      }
+    );
+
+
+  const bodyText =
+    await response.text();
+
+
+  if (!response.ok) {
+
+    const error =
+      new Error(
+        `Gemini HTTP ${response.status}: ${bodyText}`
+      );
+
+    error.status =
+      response.status;
+
+    throw error;
+  }
+
+
+  const data =
+    JSON.parse(
+      bodyText
+    );
+
+
+  const outputText =
+    extractOutputText(
+      data
+    );
+
+
+  const parsed =
+    parseJsonText(
+      outputText
+    );
+
+
+  const urls =
+    extractSourceUrls(
+      data
+    );
+
+
+  return {
+    ...parsed,
+
+    출처URL:
+      urls.join(
+        '\n'
+      )
+  };
+}
+
+
+// ============================================================
+// DB 업데이트
+// ============================================================
+
+function updateDbAi(
+  targetMonth,
+  resultMap
+) {
+
+  const dbPath =
+    path.join(
+      OUTPUT_DIR,
+      DB_FILE_NAME
+    );
+
+
+  if (
+    !fs.existsSync(
+      dbPath
+    )
+  ) {
+    return;
+  }
+
+
+  const wb =
+    XLSX.readFile(
+      dbPath
+    );
+
+
+  const rows =
+    sheetRows(
+      wb,
+      '누적상품DB'
+    );
+
+
+  for (const row of rows) {
+
+    if (
+      clean(
+        row['조사월']
+      ) !==
+      targetMonth
+    ) {
+      continue;
+    }
+
+
+    const result =
+      resultMap.get(
+        makeFamilyKey(row)
+      );
+
+
+    if (!result) {
+      continue;
+    }
+
+
+    Object.assign(
+      row,
+      result
+    );
+  }
+
+
+  replaceSheet(
+    wb,
+    '누적상품DB',
+    rows
+  );
+
+
+  XLSX.writeFile(
+    wb,
+    dbPath
+  );
+}
+
+
+// ============================================================
+// 실행
+// ============================================================
+
+async function main() {
+
+  if (!GEMINI_API_KEY) {
+    throw new Error(
+      'GEMINI_API_KEY가 없습니다.'
+    );
+  }
+
+
+  const targetMonth =
+    getTargetMonth();
 
 
   const monthlyPath =
@@ -716,577 +823,404 @@ async function main() {
     );
 
 
-  const dbPath =
-    path.join(
-      OUTPUT_DIR,
-      '생보협회_상품DB.xlsx'
-    );
-
-
-  if (
-    !fs.existsSync(
-      monthlyPath
-    )
-  ) {
-
-    throw new Error(
-      '월별 통합파일이 없습니다.'
-    );
-  }
-
-
   const workbook =
     XLSX.readFile(
       monthlyPath
     );
 
 
-  const familySheet =
-    workbook.Sheets[
-      '상품군목록'
-    ];
-
-
-  if (!familySheet) {
-
-    throw new Error(
-      '상품군목록 시트가 없습니다.'
-    );
-  }
-
-
   const familyRows =
-    worksheetToRows(
-      familySheet
+    sheetRows(
+      workbook,
+      '상품군목록'
+    );
+
+
+  const productRows =
+    sheetRows(
+      workbook,
+      '상품목록'
+    );
+
+
+  /*
+   * ★ 핵심 필터
+   *
+   * 전체 생보사는 그대로 유지.
+   * AI만 5개사 + 신규/신규급부 후보로 제한.
+   */
+  const targets =
+    familyRows.filter(
+      row =>
+
+        row['AI대상여부'] ===
+          'Y' &&
+
+        isTargetCompany(
+          row['보험회사명']
+        ) &&
+
+        [
+          '신규상품후보',
+          '신규급부·특약후보'
+        ].includes(
+          row['규칙분류']
+        )
     );
 
 
   console.log(
-    `AI 분석 대상 상품군: ${familyRows.length}개`
+    `전체 상품군: ${familyRows.length}개`
   );
 
 
-  /*
-   * 상품유형별로 나누면
-   * 한 번의 검색에 너무 많은 상품을 넣지 않게 됨
-   */
-  const categoryMap =
-    new Map();
+  console.log(
+    `AI 심층분석 대상: ${targets.length}개`
+  );
 
 
-  for (
-    const row of familyRows
-  ) {
+  targets.forEach(
+    row => {
 
-    const category =
-      String(
-        row[
-          '상품유형'
-        ] || '기타'
-      );
-
-
-    if (
-      !categoryMap.has(
-        category
-      )
-    ) {
-
-      categoryMap.set(
-        category,
-        []
+      console.log(
+        `[AI대상] ` +
+        `${canonicalCompany(row['보험회사명'])} | ` +
+        `${row['상품군명']} | ` +
+        `${row['규칙분류']}`
       );
     }
+  );
 
 
-    categoryMap
-      .get(category)
-      .push(row);
-  }
-
-
-  const allResults =
+  const resultMap =
     new Map();
 
 
-  for (
-    const [
-      category,
-      rows
-    ] of categoryMap
-  ) {
+  for (const row of targets) {
+
+    const key =
+      makeFamilyKey(row);
+
 
     console.log(
-      `검색·분류 시작: ${category} / ${rows.length}개 상품군`
+      `AI 검색: ` +
+      `${canonicalCompany(row['보험회사명'])} / ` +
+      `${row['상품군명']}`
     );
 
 
-    /*
-     * 한 유형에 상품이 지나치게 많으면
-     * 12개씩 나눠서 검색
-     */
-    const chunkSize = 12;
+    try {
 
-
-    for (
-      let start = 0;
-      start < rows.length;
-      start += chunkSize
-    ) {
-
-      const chunk =
-        rows.slice(
-          start,
-          start + chunkSize
+      const ai =
+        await callGemini(
+          row
         );
 
 
-      try {
+      const result = {
 
-        const prompt =
-          makePrompt(
-            targetMonth,
-            category,
-            chunk
-          );
+        AI보완상태:
+          '완료',
 
+        AI검증결과:
+          ai.AI검증결과 ||
+          '',
 
-        const response =
-          await callGemini(
-            prompt
-          );
+        AI신뢰도:
+          ai.AI신뢰도 ||
+          '',
 
+        AI주요특징:
+          ai.주요특징 ||
+          '',
 
-        const jsonText =
-          cleanJsonText(
-            response.output
-          );
+        AI확인근거:
+          ai.확인근거 ||
+          '',
 
-
-        const parsed =
-          JSON.parse(
-            jsonText
-          );
-
-
-        for (
-          let i = 0;
-          i < chunk.length;
-          i++
-        ) {
-
-          const row =
-            chunk[i];
+        AI출처URL:
+          ai.출처URL ||
+          ''
+      };
 
 
-          const item =
-            parsed.find(
-              x =>
-                String(x.key) ===
-                String(i + 1)
-            );
+      Object.assign(
+        row,
+        result
+      );
 
 
-          const familyKey =
-            String(
-              row[
-                '상품군키'
-              ] || ''
-            );
+      resultMap.set(
+        key,
+        result
+      );
 
 
-          if (item) {
-
-            allResults.set(
-              familyKey,
-              {
-
-                최종분류:
-                  item.최종분류 ||
-                  '확인필요',
-
-                AI신뢰도:
-                  item.신뢰도 ||
-                  '낮음',
-
-                주요특징:
-                  item.주요특징 ||
-                  '',
-
-                분류근거:
-                  item.분류근거 ||
-                  '',
-
-                출처URL:
-                  Array.isArray(
-                    item.출처URL
-                  )
-                    ? item
-                        .출처URL
-                        .join('\n')
-                    : String(
-                        item.출처URL ||
-                        ''
-                      )
-              }
-            );
-
-          } else {
-
-            allResults.set(
-              familyKey,
-              {
-
-                최종분류:
-                  '확인필요',
-
-                AI신뢰도:
-                  '낮음',
-
-                주요특징:
-                  '',
-
-                분류근거:
-                  'AI 결과에서 해당 상품을 찾지 못함',
-
-                출처URL:
-                  ''
-              }
-            );
-          }
-        }
-
-
-      } catch (error) {
-
-        console.error(
-          `${category} 일부 분석 실패: ${error.message}`
-        );
-
-
-        /*
-         * 한 묶음 실패 때문에
-         * 전체 월간 작업을 중단하지 않음
-         */
-        for (
-          const row of chunk
-        ) {
-
-          const familyKey =
-            String(
-              row[
-                '상품군키'
-              ] || ''
-            );
-
-
-          allResults.set(
-            familyKey,
-            {
-
-              최종분류:
-                '확인필요',
-
-              AI신뢰도:
-                '낮음',
-
-              주요특징:
-                '',
-
-              분류근거:
-                'Gemini 분석 실패: ' +
-                error.message,
-
-              출처URL:
-                ''
-            }
-          );
-        }
-      }
+    } catch (error) {
 
 
       /*
-       * API 과호출 완화
+       * 429는 '확인필요'가 아님.
+       * 기술적인 API 한도 문제로 별도 표시.
        */
-      await sleep(
-        2500
-      );
+      if (
+        error.status ===
+        429
+      ) {
+
+        const result = {
+
+          AI보완상태:
+            '쿼터초과',
+
+          AI검증결과:
+            '',
+
+          AI신뢰도:
+            '',
+
+          AI주요특징:
+            '',
+
+          AI확인근거:
+            'Gemini API 사용량 한도 초과',
+
+          AI출처URL:
+            ''
+        };
+
+
+        Object.assign(
+          row,
+          result
+        );
+
+
+        resultMap.set(
+          key,
+          result
+        );
+
+
+        console.log(
+          `429 쿼터초과 → 규칙분류 유지: ${row['상품군명']}`
+        );
+
+
+      } else {
+
+
+        const result = {
+
+          AI보완상태:
+            '오류',
+
+          AI검증결과:
+            '',
+
+          AI신뢰도:
+            '',
+
+          AI주요특징:
+            '',
+
+          AI확인근거:
+            String(
+              error.message ||
+              error
+            ).slice(
+              0,
+              500
+            ),
+
+          AI출처URL:
+            ''
+        };
+
+
+        Object.assign(
+          row,
+          result
+        );
+
+
+        resultMap.set(
+          key,
+          result
+        );
+      }
+    }
+
+
+    /*
+     * 요청을 연속 폭주시키지 않도록
+     * 약간 간격을 둔다.
+     */
+    await new Promise(
+      resolve =>
+        setTimeout(
+          resolve,
+          5000
+        )
+    );
+  }
+
+
+  /*
+   * AI 비대상 상품에는 명확히 표시
+   */
+  for (const row of familyRows) {
+
+    if (
+      row['AI대상여부'] !==
+      'Y'
+    ) {
+
+      row['AI보완상태'] =
+        '비대상';
     }
   }
 
 
   /*
-   * 상품군목록 업데이트
+   * 상품목록에도 상품군 결과 연결
    */
-  for (
-    const row of familyRows
-  ) {
+  for (const row of productRows) {
 
-    const result =
-      allResults.get(
-        String(
-          row[
-            '상품군키'
-          ] || ''
-        )
+    const family =
+      familyRows.find(
+        f =>
+          makeFamilyKey(f) ===
+          makeFamilyKey(row)
       );
 
 
-    row[
-      '최종분류'
-    ] =
-      result?.최종분류 ||
-      '확인필요';
+    if (!family) {
+      continue;
+    }
 
 
-    row[
-      'AI신뢰도'
-    ] =
-      result?.AI신뢰도 ||
-      '낮음';
-
-
-    row[
-      '주요특징'
-    ] =
-      result?.주요특징 ||
+    row['AI보완상태'] =
+      family['AI보완상태'] ||
       '';
 
-
-    row[
-      '분류근거'
-    ] =
-      result?.분류근거 ||
+    row['AI검증결과'] =
+      family['AI검증결과'] ||
       '';
 
+    row['AI신뢰도'] =
+      family['AI신뢰도'] ||
+      '';
 
-    row[
-      '출처URL'
-    ] =
-      result?.출처URL ||
+    row['AI주요특징'] =
+      family['AI주요특징'] ||
+      '';
+
+    row['AI확인근거'] =
+      family['AI확인근거'] ||
+      '';
+
+    row['AI출처URL'] =
+      family['AI출처URL'] ||
       '';
   }
-
-
-  const familyHeaders =
-    [
-      '조사월',
-      '보험구분',
-      '상품유형',
-      '보험회사명',
-      '상품군명',
-      '상품군키',
-      '판매일자',
-      '세부상품수',
-      '세부상품명',
-      '비교상태',
-      '최종분류',
-      'AI신뢰도',
-      '주요특징',
-      '분류근거',
-      '출처URL'
-    ];
 
 
   replaceSheet(
     workbook,
     '상품군목록',
-    familyRows,
-    familyHeaders
+    familyRows
   );
-
-
-  /*
-   * 상품목록에도 같은 AI 결과 전달
-   */
-  const productSheet =
-    workbook.Sheets[
-      '상품목록'
-    ];
-
-
-  const productRows =
-    worksheetToRows(
-      productSheet
-    );
-
-
-  for (
-    const row of productRows
-  ) {
-
-    const result =
-      allResults.get(
-        String(
-          row[
-            '상품군키'
-          ] || ''
-        )
-      );
-
-
-    row[
-      '최종분류'
-    ] =
-      result?.최종분류 ||
-      '확인필요';
-
-
-    row[
-      'AI신뢰도'
-    ] =
-      result?.AI신뢰도 ||
-      '낮음';
-
-
-    row[
-      '주요특징'
-    ] =
-      result?.주요특징 ||
-      '';
-
-
-    row[
-      '분류근거'
-    ] =
-      result?.분류근거 ||
-      '';
-
-
-    row[
-      '출처URL'
-    ] =
-      result?.출처URL ||
-      '';
-  }
-
-
-  const productHeaders =
-    [
-      '조사월',
-      '보험구분',
-      '상품유형',
-      '보험회사명',
-      '상품명',
-      '상품군명',
-      '판매일자',
-      '상품코드',
-      '대표상품키',
-      '상품군키',
-      '비교상태',
-      '비교기준월',
-      '최초확인월',
-      '최종분류',
-      'AI신뢰도',
-      '주요특징',
-      '분류근거',
-      '출처URL',
-      '급부행수',
-      '원본파일명'
-    ];
 
 
   replaceSheet(
     workbook,
     '상품목록',
-    productRows,
-    productHeaders
+    productRows
   );
 
 
-  /*
-   * 요약 시트
-   */
-  const counts = {};
+  const completed =
+    familyRows.filter(
+      row =>
+        row['AI보완상태'] ===
+        '완료'
+    ).length;
 
 
-  for (
-    const row of familyRows
-  ) {
-
-    const type =
-      row[
-        '최종분류'
-      ] ||
-      '확인필요';
+  const quota =
+    familyRows.filter(
+      row =>
+        row['AI보완상태'] ===
+        '쿼터초과'
+    ).length;
 
 
-    counts[type] =
-      (
-        counts[type] ||
-        0
-      ) + 1;
-  }
+  const errors =
+    familyRows.filter(
+      row =>
+        row['AI보완상태'] ===
+        '오류'
+    ).length;
 
 
-  const summaryRows =
-    [
-      {
-        항목:
-          '조사월',
+  const summary = [
+    {
+      구분:
+        '전체 상품군',
+      건수:
+        familyRows.length
+    },
 
-        값:
-          targetMonth
-      },
+    {
+      구분:
+        'AI 대상',
+      건수:
+        targets.length
+    },
 
-      {
-        항목:
-          '전체 상품군',
+    {
+      구분:
+        'AI 보완 완료',
+      건수:
+        completed
+    },
 
-        값:
-          familyRows.length
-      },
+    {
+      구분:
+        'AI 쿼터초과',
+      건수:
+        quota
+    },
 
-      {
-        항목:
-          '신규상품',
+    {
+      구분:
+        'AI 오류',
+      건수:
+        errors
+    },
 
-        값:
-          counts[
-            '신규상품'
-          ] || 0
-      },
+    {
+      구분:
+        'AI 비대상',
+      건수:
+        familyRows.length -
+        targets.length
+    },
 
-      {
-        항목:
-          '상품개정',
-
-        값:
-          counts[
-            '상품개정'
-          ] || 0
-      },
-
-      {
-        항목:
-          '신규담보·특약',
-
-        값:
-          counts[
-            '신규담보·특약'
-          ] || 0
-      },
-
-      {
-        항목:
-          '확인필요',
-
-        값:
-          counts[
-            '확인필요'
-          ] || 0
-      }
-    ];
+    {
+      구분:
+        '고정 AI 대상회사',
+      건수:
+        5
+    }
+  ];
 
 
   replaceSheet(
     workbook,
     'AI분류요약',
-    summaryRows,
-    [
-      '항목',
-      '값'
-    ]
+    summary
   );
 
 
@@ -1296,140 +1230,13 @@ async function main() {
   );
 
 
-  /*
-   * 누적DB에도 최종분류 결과 반영
-   */
-  if (
-    fs.existsSync(
-      dbPath
-    )
-  ) {
-
-    const dbWorkbook =
-      XLSX.readFile(
-        dbPath
-      );
+  updateDbAi(
+    targetMonth,
+    resultMap
+  );
 
 
-    const dbSheet =
-      dbWorkbook.Sheets[
-        '누적상품DB'
-      ];
-
-
-    if (dbSheet) {
-
-      const dbRows =
-        worksheetToRows(
-          dbSheet
-        );
-
-
-      for (
-        const row of dbRows
-      ) {
-
-        if (
-          String(
-            row['조사월']
-          ) !==
-          targetMonth
-        ) {
-          continue;
-        }
-
-
-        const result =
-          allResults.get(
-            String(
-              row[
-                '상품군키'
-              ] || ''
-            )
-          );
-
-
-        if (!result) {
-          continue;
-        }
-
-
-        row[
-          '최종분류'
-        ] =
-          result.최종분류;
-
-
-        row[
-          'AI신뢰도'
-        ] =
-          result.AI신뢰도;
-
-
-        row[
-          '주요특징'
-        ] =
-          result.주요특징;
-
-
-        row[
-          '분류근거'
-        ] =
-          result.분류근거;
-
-
-        row[
-          '출처URL'
-        ] =
-          result.출처URL;
-      }
-
-
-      const dbHeaders =
-        [
-          '조사월',
-          '보험구분',
-          '상품유형',
-          '보험회사명',
-          '상품명',
-          '상품군명',
-          '판매일자',
-          '상품코드',
-          '대표상품키',
-          '상품군키',
-          '비교상태',
-          '비교기준월',
-          '최초확인월',
-          '최종분류',
-          'AI신뢰도',
-          '주요특징',
-          '분류근거',
-          '출처URL',
-          '급부행수',
-          '원본파일명'
-        ];
-
-
-      replaceSheet(
-        dbWorkbook,
-        '누적상품DB',
-        dbRows,
-        dbHeaders
-      );
-
-
-      XLSX.writeFile(
-        dbWorkbook,
-        dbPath
-      );
-    }
-  }
-
-
-  /*
-   * Drive 파일 교체
-   */
-  await apiUpload(
+  await uploadFile(
     monthlyPath,
     path.basename(
       monthlyPath
@@ -1437,26 +1244,41 @@ async function main() {
   );
 
 
+  const dbPath =
+    path.join(
+      OUTPUT_DIR,
+      DB_FILE_NAME
+    );
+
+
   if (
     fs.existsSync(
       dbPath
     )
   ) {
 
-    await apiUpload(
+    await uploadFile(
       dbPath,
-      '생보협회_상품DB.xlsx'
+      DB_FILE_NAME
     );
   }
 
 
+  console.log('');
   console.log(
-    'AI 최종분류 완료'
+    `AI 대상: ${targets.length}개`
   );
 
+  console.log(
+    `AI 완료: ${completed}개`
+  );
 
   console.log(
-    counts
+    `쿼터초과: ${quota}개`
+  );
+
+  console.log(
+    'AI 보완 완료'
   );
 }
 
