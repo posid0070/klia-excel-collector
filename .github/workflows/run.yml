@@ -1,7 +1,21 @@
 name: KLIA Excel Auto Scraper
 
 on:
+
   workflow_dispatch:
+    inputs:
+
+      target_month:
+        description: '테스트용 조사월 YYYY-MM. 비우면 직전월'
+        required: false
+        type: string
+
+
+  schedule:
+
+    # 매월 1일 오전 9시 10분 KST
+    - cron: '10 0 1 * *'
+
 
 jobs:
 
@@ -9,38 +23,58 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 15
+    timeout-minutes: 20
+
 
     steps:
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: '24'
+
 
       - name: Install dependencies
         run: npm install
 
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run scraper
+
+      - name: Download 13 KLIA Excel files
         run: node scraper.js
 
-      - name: Show downloaded files
-        if: always()
-        run: |
-          echo "다운로드된 파일:"
-          ls -lah downloads || true
 
-      - name: Save Excel files
+      - name: Merge monthly products and upload to Drive
+        env:
+
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+
+          UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
+
+          TARGET_MONTH: ${{ github.event.inputs.target_month }}
+
+        run: node process_upload.js
+
+
+      - name: Save run artifacts
         if: always()
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: klia-excel-files
-          path: downloads/
+
+          path: |
+            downloads/
+            output/
+
           if-no-files-found: warn
+
           retention-days: 7
