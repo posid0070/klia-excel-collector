@@ -2,18 +2,31 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 
-const OUTPUT_DIR = path.join(__dirname, 'output');
 
-const UPLOAD_URL = process.env.UPLOAD_URL;
-const UPLOAD_SECRET = process.env.UPLOAD_SECRET;
+// ============================================================
+// 기본 설정
+// ============================================================
+
+const OUTPUT_DIR =
+  path.join(__dirname, 'output');
+
+const DB_FILE_NAME =
+  '생보협회_상품DB.xlsx';
+
+const UPLOAD_URL =
+  process.env.UPLOAD_URL;
+
+const UPLOAD_SECRET =
+  process.env.UPLOAD_SECRET;
+
 const TARGET_MONTH_OVERRIDE =
-  String(process.env.TARGET_MONTH || '').trim();
-
-const DB_FILE_NAME = '생보협회_상품DB.xlsx';
+  String(
+    process.env.TARGET_MONTH || ''
+  ).trim();
 
 
 // ============================================================
-// AI 심층분석 대상 5개사 - 앞으로 고정
+// AI 심층분석 고정 5개사
 // ============================================================
 
 const AI_TARGET_COMPANIES = [
@@ -30,14 +43,18 @@ const AI_TARGET_COMPANIES = [
 // ============================================================
 
 function clean(value) {
+
   return String(value || '')
     .replace(/\u00a0/g, ' ')
+    .replace(/\r/g, ' ')
+    .replace(/\n/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 
 function norm(value) {
+
   return clean(value)
     .toLowerCase()
     .replace(
@@ -50,116 +67,218 @@ function norm(value) {
 function getTargetMonth() {
 
   if (TARGET_MONTH_OVERRIDE) {
+
+    if (
+      !/^\d{4}-\d{2}$/.test(
+        TARGET_MONTH_OVERRIDE
+      )
+    ) {
+
+      throw new Error(
+        'TARGET_MONTH는 YYYY-MM 형식이어야 합니다.'
+      );
+    }
+
     return TARGET_MONTH_OVERRIDE;
   }
 
-  const now = new Date();
 
   const parts =
-    new Intl.DateTimeFormat(
-      'en-US',
-      {
-        timeZone: 'Asia/Seoul',
-        year: 'numeric',
-        month: '2-digit'
-      }
-    )
-      .formatToParts(now)
-      .reduce(
-        (acc, p) => {
-          acc[p.type] = p.value;
-          return acc;
-        },
-        {}
-      );
+    Object.fromEntries(
 
-  let year = Number(parts.year);
-  let month = Number(parts.month) - 1;
+      new Intl.DateTimeFormat(
+        'en-US',
+        {
+          timeZone: 'Asia/Seoul',
+          year: 'numeric',
+          month: '2-digit'
+        }
+      )
+        .formatToParts(new Date())
+        .map(
+          p => [p.type, p.value]
+        )
+    );
+
+
+  let year =
+    Number(parts.year);
+
+  let month =
+    Number(parts.month) - 1;
+
 
   if (month === 0) {
+
     year -= 1;
     month = 12;
   }
 
+
   return (
     `${year}-` +
-    String(month).padStart(2, '0')
+    String(month)
+      .padStart(2, '0')
   );
 }
 
 
-function getCell(row, aliases) {
+// ============================================================
+// 보험회사명 통일
+// ============================================================
 
-  for (const key of aliases) {
+function canonicalCompany(value) {
+
+  const s =
+    norm(value);
+
+
+  if (
+    s.includes(
+      '삼성생명'
+    )
+  ) {
+    return '삼성생명';
+  }
+
+
+  if (
+    s.includes(
+      '한화생명'
+    )
+  ) {
+    return '한화생명';
+  }
+
+
+  if (
+    s.includes(
+      '교보생명'
+    )
+  ) {
+    return '교보생명';
+  }
+
+
+  if (
+    s.includes(
+      '신한라이프'
+    ) ||
+    s.includes(
+      '신한생명'
+    )
+  ) {
+    return '신한라이프';
+  }
+
+
+  if (
+    s.includes(
+      'nh농협생명'
+    ) ||
+    s.includes(
+      '농협생명'
+    )
+  ) {
+    return 'NH농협생명';
+  }
+
+
+  return clean(value);
+}
+
+
+function isAiTargetCompany(
+  value
+) {
+
+  return AI_TARGET_COMPANIES
+    .includes(
+      canonicalCompany(
+        value
+      )
+    );
+}
+
+
+// ============================================================
+// Sheet 읽기
+// ============================================================
+
+function sheetRows(
+  workbook,
+  sheetName
+) {
+
+  const sheet =
+    workbook.Sheets[
+      sheetName
+    ];
+
+
+  if (!sheet) {
+    return [];
+  }
+
+
+  return XLSX.utils
+    .sheet_to_json(
+      sheet,
+      {
+        defval: ''
+      }
+    );
+}
+
+
+// ============================================================
+// 필드 찾기
+// ============================================================
+
+function getCell(
+  row,
+  aliases
+) {
+
+  for (
+    const key
+    of aliases
+  ) {
 
     if (
-      Object.prototype.hasOwnProperty.call(
-        row,
-        key
-      ) &&
-      clean(row[key])
+      Object.prototype
+        .hasOwnProperty
+        .call(
+          row,
+          key
+        )
     ) {
-      return clean(row[key]);
+
+      const value =
+        clean(
+          row[key]
+        );
+
+
+      if (value) {
+        return value;
+      }
     }
   }
+
 
   return '';
 }
 
 
 // ============================================================
-// 보험회사명 정규화
-// ============================================================
-
-function canonicalCompany(value) {
-
-  const s = norm(value);
-
-  if (s.includes('삼성생명')) {
-    return '삼성생명';
-  }
-
-  if (s.includes('한화생명')) {
-    return '한화생명';
-  }
-
-  if (s.includes('교보생명')) {
-    return '교보생명';
-  }
-
-  if (
-    s.includes('신한라이프') ||
-    s.includes('신한생명')
-  ) {
-    return '신한라이프';
-  }
-
-  if (
-    s.includes('nh농협생명') ||
-    s.includes('농협생명')
-  ) {
-    return 'NH농협생명';
-  }
-
-  return clean(value);
-}
-
-
-function isAiTargetCompany(value) {
-
-  return AI_TARGET_COMPANIES.includes(
-    canonicalCompany(value)
-  );
-}
-
-
-// ============================================================
-// Family key
+// 상품군 키
 // ============================================================
 
 function makeFamilyKey(row) {
 
   return [
+
     norm(
       getCell(
         row,
@@ -196,6 +315,7 @@ function makeFamilyKey(row) {
         ]
       )
     )
+
   ].join('|');
 }
 
@@ -207,7 +327,9 @@ function makeProductKey(
 
   return (
     norm(
-      canonicalCompany(company)
+      canonicalCompany(
+        company
+      )
     ) +
     '|' +
     norm(product)
@@ -216,41 +338,21 @@ function makeProductKey(
 
 
 // ============================================================
-// 엑셀 읽기
-// ============================================================
-
-function sheetRows(
-  workbook,
-  sheetName
-) {
-
-  const sheet =
-    workbook.Sheets[sheetName];
-
-  if (!sheet) {
-    return [];
-  }
-
-  return XLSX.utils.sheet_to_json(
-    sheet,
-    {
-      defval: ''
-    }
-  );
-}
-
-
-// ============================================================
-// 상품명 → 상품군 연결
+// 상품명 → 상품군 연결표
 // ============================================================
 
 function buildProductFamilyMap(
   productRows
 ) {
 
-  const map = new Map();
+  const map =
+    new Map();
 
-  for (const row of productRows) {
+
+  for (
+    const row
+    of productRows
+  ) {
 
     const company =
       getCell(
@@ -262,31 +364,42 @@ function buildProductFamilyMap(
         ]
       );
 
+
     const product =
       getCell(
         row,
         ['상품명']
       );
 
-    if (!company || !product) {
+
+    if (
+      !company ||
+      !product
+    ) {
       continue;
     }
 
+
     map.set(
+
       makeProductKey(
         company,
         product
       ),
-      makeFamilyKey(row)
+
+      makeFamilyKey(
+        row
+      )
     );
   }
+
 
   return map;
 }
 
 
 // ============================================================
-// 급부 데이터
+// 급부 필드
 // ============================================================
 
 function benefitName(row) {
@@ -298,8 +411,7 @@ function benefitName(row) {
       '급부명',
       '급부',
       '보장명',
-      '담보명',
-      '보장내용'
+      '담보명'
     ]
   );
 }
@@ -333,19 +445,29 @@ function benefitAmount(row) {
 }
 
 
+// ============================================================
+// 상품군별 급부정보 생성
+// ============================================================
+
 function buildBenefitMap(
   productRows,
   detailRows
 ) {
 
-  const productMap =
+  const productFamilyMap =
     buildProductFamilyMap(
       productRows
     );
 
-  const result = new Map();
 
-  for (const row of detailRows) {
+  const result =
+    new Map();
+
+
+  for (
+    const row
+    of detailRows
+  ) {
 
     const company =
       getCell(
@@ -357,57 +479,107 @@ function buildBenefitMap(
         ]
       );
 
+
     const product =
       getCell(
         row,
         ['상품명']
       );
 
-    if (!company || !product) {
+
+    if (
+      !company ||
+      !product
+    ) {
       continue;
     }
 
+
     const familyKey =
-      productMap.get(
+      productFamilyMap.get(
         makeProductKey(
           company,
           product
         )
       );
 
+
     if (!familyKey) {
       continue;
     }
 
-    if (!result.has(familyKey)) {
+
+    if (
+      !result.has(
+        familyKey
+      )
+    ) {
 
       result.set(
         familyKey,
         {
-          names: new Set(),
-          signatures: new Set()
+          names:
+            new Map(),
+
+          signatures:
+            new Set()
         }
       );
     }
 
+
     const item =
-      result.get(familyKey);
+      result.get(
+        familyKey
+      );
+
 
     const name =
-      benefitName(row);
+      benefitName(
+        row
+      );
+
 
     const reason =
-      benefitReason(row);
+      benefitReason(
+        row
+      );
+
 
     const amount =
-      benefitAmount(row);
-
-    if (name) {
-      item.names.add(
-        norm(name)
+      benefitAmount(
+        row
       );
+
+
+    /*
+     * 급부명은
+     * 정규화값 → 실제 표시명
+     */
+    if (name) {
+
+      const normalized =
+        norm(name);
+
+
+      if (
+        !item.names.has(
+          normalized
+        )
+      ) {
+
+        item.names.set(
+          normalized,
+          name
+        );
+      }
     }
 
+
+    /*
+     * 급부명 + 지급사유 + 지급금액
+     * 전체 조합
+     */
     if (
       name ||
       reason ||
@@ -415,6 +587,7 @@ function buildBenefitMap(
     ) {
 
       item.signatures.add(
+
         [
           norm(name),
           norm(reason),
@@ -424,30 +597,36 @@ function buildBenefitMap(
     }
   }
 
+
   return result;
 }
 
 
 // ============================================================
-// Apps Script Drive API
+// Apps Script API
 // ============================================================
 
-async function apiCall(payload) {
+async function apiCall(
+  payload
+) {
 
   if (
     !UPLOAD_URL ||
     !UPLOAD_SECRET
   ) {
+
     throw new Error(
       'UPLOAD_URL 또는 UPLOAD_SECRET이 없습니다.'
     );
   }
 
+
   const response =
     await fetch(
       UPLOAD_URL,
       {
-        method: 'POST',
+        method:
+          'POST',
 
         headers: {
           'Content-Type':
@@ -458,38 +637,58 @@ async function apiCall(payload) {
           JSON.stringify({
             secret:
               UPLOAD_SECRET,
+
             ...payload
           })
       }
     );
 
+
   const text =
     await response.text();
 
+
   let result;
 
+
   try {
-    result = JSON.parse(text);
+
+    result =
+      JSON.parse(
+        text
+      );
+
   } catch {
+
     throw new Error(
       'Apps Script 응답 오류: ' +
-      text.slice(0, 300)
+      text.slice(
+        0,
+        300
+      )
     );
   }
+
 
   if (
     !response.ok ||
     !result.ok
   ) {
+
     throw new Error(
       result.error ||
       `HTTP ${response.status}`
     );
   }
 
+
   return result;
 }
 
+
+// ============================================================
+// 과거 월별 통합본 다운로드
+// ============================================================
 
 async function downloadMonthlyFile(
   month
@@ -498,16 +697,27 @@ async function downloadMonthlyFile(
   const fileName =
     `${month}_생보협회_상품통합.xlsx`;
 
+
   const result =
     await apiCall({
-      action: 'download',
-      folderType: 'merged',
+
+      action:
+        'download',
+
+      folderType:
+        'merged',
+
       fileName
     });
 
-  if (!result.exists) {
+
+  if (
+    !result.exists
+  ) {
+
     return null;
   }
+
 
   const filePath =
     path.join(
@@ -515,17 +725,25 @@ async function downloadMonthlyFile(
       `_history_${month}.xlsx`
     );
 
+
   fs.writeFileSync(
+
     filePath,
+
     Buffer.from(
       result.base64,
       'base64'
     )
   );
 
+
   return filePath;
 }
 
+
+// ============================================================
+// Drive Upload
+// ============================================================
 
 async function uploadFile(
   filePath,
@@ -533,12 +751,23 @@ async function uploadFile(
 ) {
 
   const base64 =
-    fs.readFileSync(filePath)
-      .toString('base64');
+    fs
+      .readFileSync(
+        filePath
+      )
+      .toString(
+        'base64'
+      );
+
 
   await apiCall({
-    action: 'upload',
-    folderType: 'merged',
+
+    action:
+      'upload',
+
+    folderType:
+      'merged',
+
     fileName,
 
     mimeType:
@@ -547,6 +776,7 @@ async function uploadFile(
     base64
   });
 
+
   console.log(
     `Drive 저장 완료: ${fileName}`
   );
@@ -554,7 +784,7 @@ async function uploadFile(
 
 
 // ============================================================
-// 누적 DB에서 과거 조사월 찾기
+// 누적 DB에서 과거월 추출
 // ============================================================
 
 function getHistoricalMonths(
@@ -567,21 +797,34 @@ function getHistoricalMonths(
       DB_FILE_NAME
     );
 
-  if (!fs.existsSync(dbPath)) {
+
+  if (
+    !fs.existsSync(
+      dbPath
+    )
+  ) {
+
     return [];
   }
 
-  const wb =
-    XLSX.readFile(dbPath);
+
+  const workbook =
+    XLSX.readFile(
+      dbPath
+    );
+
 
   const rows =
     sheetRows(
-      wb,
+      workbook,
       '누적상품DB'
     );
 
+
   return [
+
     ...new Set(
+
       rows
         .map(
           row =>
@@ -591,16 +834,21 @@ function getHistoricalMonths(
         )
         .filter(
           month =>
-            /^\d{4}-\d{2}$/.test(month) &&
+            /^\d{4}-\d{2}$/.test(
+              month
+            ) &&
             month < targetMonth
         )
     )
-  ].sort().reverse();
+
+  ]
+    .sort()
+    .reverse();
 }
 
 
 // ============================================================
-// 과거 상품별 최신 급부정보
+// 과거 상품군 급부정보
 // ============================================================
 
 async function buildHistoricalBenefitMap(
@@ -612,16 +860,29 @@ async function buildHistoricalBenefitMap(
       targetMonth
     );
 
+
   const history =
     new Map();
 
+
   console.log(
-    `과거 비교월: ${months.join(', ') || '없음'}`
+    `급부 비교 과거월: ${
+      months.join(', ') ||
+      '없음'
+    }`
   );
 
-  for (const month of months) {
+
+  /*
+   * 최신 과거월부터 확인
+   */
+  for (
+    const month
+    of months
+  ) {
 
     let filePath;
+
 
     try {
 
@@ -633,30 +894,42 @@ async function buildHistoricalBenefitMap(
     } catch (error) {
 
       console.log(
-        `${month} 다운로드 실패 → 건너뜀`
+        `${month} 통합본 다운로드 실패 → 건너뜀`
       );
 
       continue;
     }
 
+
     if (!filePath) {
+
+      console.log(
+        `${month} 통합본 없음`
+      );
+
       continue;
     }
 
-    const wb =
-      XLSX.readFile(filePath);
+
+    const workbook =
+      XLSX.readFile(
+        filePath
+      );
+
 
     const products =
       sheetRows(
-        wb,
+        workbook,
         '상품목록'
       );
 
+
     const details =
       sheetRows(
-        wb,
+        workbook,
         '급부상세'
       );
+
 
     const benefitMap =
       buildBenefitMap(
@@ -664,14 +937,14 @@ async function buildHistoricalBenefitMap(
         details
       );
 
+
     /*
-     * 최신월부터 읽으므로
-     * 처음 나온 상품군만 저장한다.
+     * 최신 과거월 자료를 우선 사용
      */
     for (
       const [
         familyKey,
-        benefits
+        benefitInfo
       ]
       of benefitMap.entries()
     ) {
@@ -686,12 +959,13 @@ async function buildHistoricalBenefitMap(
           familyKey,
           {
             month,
-            ...benefits
+            ...benefitInfo
           }
         );
       }
     }
   }
+
 
   return history;
 }
@@ -702,18 +976,22 @@ async function buildHistoricalBenefitMap(
 // ============================================================
 
 function classifyFamily(
-  row,
+  familyRow,
   currentBenefits,
-  historicalBenefits
+  priorBenefits
 ) {
 
   const comparison =
     clean(
-      row['비교상태']
+      familyRow[
+        '비교상태'
+      ]
     );
 
+
   /*
-   * 누적DB상 과거 상품군이 전혀 없음
+   * build_db에서
+   * 과거 동일 상품군 자체가 없음
    */
   if (
     comparison ===
@@ -721,74 +999,110 @@ function classifyFamily(
   ) {
 
     return {
+
       type:
         '신규상품후보',
 
       reason:
-        '누적DB에 동일 상품군이 확인되지 않음',
+        '과거월 누적DB에 동일 회사·상품군이 없음',
 
       newBenefits:
         []
     };
   }
 
+
   /*
-   * 과거 동일 상품군의 급부정보가 있으면
-   * 실제 급부를 비교
+   * 현재 급부와
+   * 과거 동일 상품군 급부가 모두 존재
    */
   if (
     currentBenefits &&
-    historicalBenefits
+    priorBenefits
   ) {
 
     const newBenefits =
-      [
-        ...currentBenefits.names
-      ].filter(
-        name =>
-          !historicalBenefits
-            .names
-            .has(name)
-      );
+      [];
 
+
+    for (
+      const [
+        normalizedName,
+        displayName
+      ]
+      of currentBenefits.names
+    ) {
+
+      if (
+        !priorBenefits
+          .names
+          .has(
+            normalizedName
+          )
+      ) {
+
+        newBenefits.push(
+          displayName
+        );
+      }
+    }
+
+
+    /*
+     * 과거에 없던 급부명 발생
+     */
     if (
       newBenefits.length > 0
     ) {
 
       return {
+
         type:
           '신규급부·특약후보',
 
         reason:
-          `${historicalBenefits.month} 대비 신규 급부명 확인`,
+          `${priorBenefits.month} 대비 신규 급부명 확인`,
 
-        newBenefits
+        newBenefits:
+          [
+            ...new Set(
+              newBenefits
+            )
+          ]
       };
     }
 
 
-    const currentSignatures =
-      [...currentBenefits.signatures];
+    /*
+     * 급부명은 같지만
+     * 지급사유/지급금액 조합 변화
+     */
+    const changedSignature =
+      [
+        ...currentBenefits
+          .signatures
+      ]
+        .some(
+          signature =>
+            !priorBenefits
+              .signatures
+              .has(
+                signature
+              )
+        );
 
-    const oldSignatures =
-      historicalBenefits.signatures;
 
-
-    const changed =
-      currentSignatures.some(
-        sig =>
-          !oldSignatures.has(sig)
-      );
-
-
-    if (changed) {
+    if (
+      changedSignature
+    ) {
 
       return {
+
         type:
           '상품개정후보',
 
         reason:
-          `${historicalBenefits.month} 대비 지급사유 또는 지급금액 변화 가능`,
+          `${priorBenefits.month} 대비 지급사유 또는 지급금액 변화 확인`,
 
         newBenefits:
           []
@@ -796,12 +1110,16 @@ function classifyFamily(
     }
 
 
+    /*
+     * 동일 급부구조
+     */
     return {
+
       type:
         '동일상품·유형변경',
 
       reason:
-        '과거 동일 상품군과 급부구조가 동일함',
+        `${priorBenefits.month} 대비 급부구조 동일`,
 
       newBenefits:
         []
@@ -810,21 +1128,21 @@ function classifyFamily(
 
 
   /*
-   * 급부 과거자료는 없지만
-   * build_db상 개정 후보인 경우
+   * 과거 급부통합본은 없지만
+   * DB에서 상품군 개정으로 판단
    */
   if (
-    comparison.includes(
-      '개정후보'
-    )
+    comparison ===
+    '상품개정후보'
   ) {
 
     return {
+
       type:
         '상품개정후보',
 
       reason:
-        `누적DB 비교결과: ${comparison}`,
+        '과거 동일 상품군이 있으나 급부 비교자료가 충분하지 않음',
 
       newBenefits:
         []
@@ -833,17 +1151,17 @@ function classifyFamily(
 
 
   if (
-    comparison.includes(
-      '재판매'
-    )
+    comparison ===
+    '동일상품 재판매·개정후보'
   ) {
 
     return {
+
       type:
         '동일상품·유형변경',
 
       reason:
-        `누적DB 비교결과: ${comparison}`,
+        '과거 동일 회사·상품명이 확인됨',
 
       newBenefits:
         []
@@ -852,7 +1170,7 @@ function classifyFamily(
 
 
   /*
-   * 최초 기준월
+   * 첫 기준월
    */
   if (
     comparison ===
@@ -860,11 +1178,12 @@ function classifyFamily(
   ) {
 
     return {
+
       type:
         '기준월·비교자료없음',
 
       reason:
-        '누적 비교자료가 없는 최초 기준월',
+        '대상월보다 이전 누적자료가 없는 기준월',
 
       newBenefits:
         []
@@ -873,11 +1192,12 @@ function classifyFamily(
 
 
   return {
+
     type:
       '확인필요',
 
     reason:
-      '규칙만으로 분류하기 어려움',
+      '규칙분류만으로 판단하기 어려움',
 
     newBenefits:
       []
@@ -886,7 +1206,79 @@ function classifyFamily(
 
 
 // ============================================================
-// Worksheet
+// AI 대상 판정
+// ============================================================
+
+function decideAiTarget(
+  familyRow,
+  classification
+) {
+
+  const company =
+    canonicalCompany(
+      familyRow[
+        '보험회사명'
+      ]
+    );
+
+
+  /*
+   * 5개사 아니면 무조건 비대상
+   */
+  if (
+    !isAiTargetCompany(
+      company
+    )
+  ) {
+
+    return {
+
+      target:
+        false,
+
+      reason:
+        'AI 고정 5개사 외'
+    };
+  }
+
+
+  /*
+   * 5개사 중에서도
+   * 신규상품 / 신규급부만
+   */
+  if (
+    ![
+      '신규상품후보',
+      '신규급부·특약후보'
+    ].includes(
+      classification.type
+    )
+  ) {
+
+    return {
+
+      target:
+        false,
+
+      reason:
+        `${company} / ${classification.type}`
+    };
+  }
+
+
+  return {
+
+    target:
+      true,
+
+    reason:
+      `${company} / ${classification.type}`
+  };
+}
+
+
+// ============================================================
+// Worksheet 교체
 // ============================================================
 
 function replaceSheet(
@@ -896,65 +1288,128 @@ function replaceSheet(
 ) {
 
   const oldIndex =
-    workbook.SheetNames.indexOf(
-      sheetName
-    );
+    workbook.SheetNames
+      .indexOf(
+        sheetName
+      );
 
-  if (oldIndex >= 0) {
 
-    workbook.SheetNames.splice(
-      oldIndex,
-      1
-    );
+  if (
+    oldIndex >= 0
+  ) {
+
+    workbook.SheetNames
+      .splice(
+        oldIndex,
+        1
+      );
+
 
     delete workbook.Sheets[
       sheetName
     ];
   }
 
+
   const sheet =
-    XLSX.utils.json_to_sheet(
-      rows
-    );
+    XLSX.utils
+      .json_to_sheet(
+        rows
+      );
+
 
   if (
     rows.length > 0
   ) {
 
     const headers =
-      Object.keys(rows[0]);
+      Object.keys(
+        rows[0]
+      );
+
 
     sheet['!autofilter'] = {
+
       ref:
-        XLSX.utils.encode_range({
-          s: {
-            r: 0,
-            c: 0
-          },
-          e: {
-            r: rows.length,
-            c:
-              headers.length - 1
-          }
-        })
+        XLSX.utils
+          .encode_range({
+
+            s: {
+              r: 0,
+              c: 0
+            },
+
+            e: {
+              r:
+                rows.length,
+
+              c:
+                headers.length - 1
+            }
+          })
     };
+
+
+    sheet['!cols'] =
+      headers.map(
+        header => {
+
+          if (
+            [
+              '상품명',
+              '상품군명',
+              '세부상품명'
+            ].includes(
+              header
+            )
+          ) {
+
+            return {
+              wch: 45
+            };
+          }
+
+
+          if (
+            [
+              '규칙분류근거',
+              'AI대상사유',
+              '신규급부목록'
+            ].includes(
+              header
+            )
+          ) {
+
+            return {
+              wch: 40
+            };
+          }
+
+
+          return {
+            wch: 18
+          };
+        }
+      );
   }
 
-  XLSX.utils.book_append_sheet(
-    workbook,
-    sheet,
-    sheetName
-  );
+
+  XLSX.utils
+    .book_append_sheet(
+      workbook,
+      sheet,
+      sheetName
+    );
 }
 
 
 // ============================================================
-// DB 현재월에도 규칙분류 반영
+// 누적 DB에도 규칙분류 반영
 // ============================================================
 
 function updateDbRules(
   targetMonth,
-  familyResultMap
+  resultMap
 ) {
 
   const dbPath =
@@ -963,63 +1418,88 @@ function updateDbRules(
       DB_FILE_NAME
     );
 
-  if (!fs.existsSync(dbPath)) {
+
+  if (
+    !fs.existsSync(
+      dbPath
+    )
+  ) {
     return;
   }
 
-  const wb =
-    XLSX.readFile(dbPath);
+
+  const workbook =
+    XLSX.readFile(
+      dbPath
+    );
+
 
   const rows =
     sheetRows(
-      wb,
+      workbook,
       '누적상품DB'
     );
 
-  for (const row of rows) {
+
+  for (
+    const row
+    of rows
+  ) {
 
     if (
       clean(
         row['조사월']
-      ) !== targetMonth
+      ) !==
+      targetMonth
     ) {
+
       continue;
     }
 
-    const key =
-      makeFamilyKey(row);
 
     const result =
-      familyResultMap.get(key);
+      resultMap.get(
+        makeFamilyKey(
+          row
+        )
+      );
+
 
     if (!result) {
       continue;
     }
 
+
     row['규칙분류'] =
       result.type;
+
 
     row['규칙분류근거'] =
       result.reason;
 
+
     row['신규급부목록'] =
-      result.newBenefitText;
+      result.newBenefits;
+
 
     row['AI대상여부'] =
       result.aiTarget;
+
 
     row['AI대상사유'] =
       result.aiReason;
   }
 
+
   replaceSheet(
-    wb,
+    workbook,
     '누적상품DB',
     rows
   );
 
+
   XLSX.writeFile(
-    wb,
+    workbook,
     dbPath
   );
 }
@@ -1033,6 +1513,7 @@ async function main() {
 
   const targetMonth =
     getTargetMonth();
+
 
   console.log(
     `규칙분류 대상월: ${targetMonth}`
@@ -1070,11 +1551,13 @@ async function main() {
       '상품목록'
     );
 
+
   const familyRows =
     sheetRows(
       workbook,
       '상품군목록'
     );
+
 
   const detailRows =
     sheetRows(
@@ -1088,6 +1571,14 @@ async function main() {
   );
 
 
+  console.log(
+    `급부상세: ${detailRows.length}행`
+  );
+
+
+  /*
+   * 현재월 상품군별 급부
+   */
   const currentBenefitMap =
     buildBenefitMap(
       productRows,
@@ -1095,6 +1586,9 @@ async function main() {
     );
 
 
+  /*
+   * 과거월 최신 급부
+   */
   const historicalMap =
     await buildHistoricalBenefitMap(
       targetMonth
@@ -1105,20 +1599,39 @@ async function main() {
     new Map();
 
 
-  let aiCount = 0;
+  const classificationCounts =
+    new Map();
 
 
-  for (const row of familyRows) {
+  let aiTargetCount = 0;
 
-    const key =
-      makeFamilyKey(row);
+
+  /*
+   * 상품군 단위 분류
+   */
+  for (
+    const row
+    of familyRows
+  ) {
+
+    const familyKey =
+      makeFamilyKey(
+        row
+      );
 
 
     const classification =
       classifyFamily(
+
         row,
-        currentBenefitMap.get(key),
-        historicalMap.get(key)
+
+        currentBenefitMap.get(
+          familyKey
+        ),
+
+        historicalMap.get(
+          familyKey
+        )
       );
 
 
@@ -1130,152 +1643,137 @@ async function main() {
       classification.reason;
 
 
-    /*
-     * 정규화된 이름보다는
-     * 사람이 확인하기 쉽도록
-     * 현재 급부명과 매칭해서 표시
-     */
-    const normalizedNew =
-      new Set(
-        classification.newBenefits
-      );
-
-
-    const readableBenefits = [];
-
-
-    for (const detail of detailRows) {
-
-      const company =
-        getCell(
-          detail,
-          [
-            '보험회사명',
-            '회사명',
-            '보험회사'
-          ]
-        );
-
-      const product =
-        getCell(
-          detail,
-          ['상품명']
-        );
-
-      const productFamilyKey =
-        buildProductFamilyMap(
-          productRows
-        ).get(
-          makeProductKey(
-            company,
-            product
-          )
-        );
-
-
-      if (
-        productFamilyKey !== key
-      ) {
-        continue;
-      }
-
-
-      const name =
-        benefitName(detail);
-
-
-      if (
-        normalizedNew.has(
-          norm(name)
-        ) &&
-        name
-      ) {
-
-        readableBenefits.push(
-          name
-        );
-      }
-    }
-
-
-    const newBenefitText =
-      [
-        ...new Set(
-          readableBenefits
-        )
-      ].join(' | ');
-
-
     row['신규급부목록'] =
-      newBenefitText;
+      classification
+        .newBenefits
+        .join(' | ');
 
 
-    const targetCompany =
-      isAiTargetCompany(
-        row['보험회사명']
+    const aiDecision =
+      decideAiTarget(
+        row,
+        classification
       );
-
-
-    const targetType =
-      [
-        '신규상품후보',
-        '신규급부·특약후보'
-      ].includes(
-        classification.type
-      );
-
-
-    const aiTarget =
-      targetCompany &&
-      targetType;
 
 
     row['AI대상여부'] =
-      aiTarget
+      aiDecision.target
         ? 'Y'
         : 'N';
 
 
     row['AI대상사유'] =
-      aiTarget
-        ? (
-            canonicalCompany(
-              row['보험회사명']
-            ) +
-            ' / ' +
-            classification.type
-          )
-        : '';
+      aiDecision.reason;
 
 
-    if (aiTarget) {
-      aiCount++;
+    /*
+     * 아직 AI 실행 전
+     */
+    row['AI보완상태'] =
+      aiDecision.target
+        ? '대기'
+        : '비대상';
+
+
+    if (
+      aiDecision.target
+    ) {
+
+      aiTargetCount += 1;
     }
 
 
+    classificationCounts.set(
+
+      classification.type,
+
+      (
+        classificationCounts.get(
+          classification.type
+        ) || 0
+      ) + 1
+    );
+
+
     resultMap.set(
-      key,
+      familyKey,
       {
+
         type:
           classification.type,
 
         reason:
           classification.reason,
 
-        newBenefitText,
+        newBenefits:
+          classification
+            .newBenefits
+            .join(' | '),
 
         aiTarget:
-          aiTarget
+          aiDecision.target
             ? 'Y'
             : 'N',
 
         aiReason:
-          row['AI대상사유']
+          aiDecision.reason
       }
     );
   }
 
 
+  /*
+   * 상품목록에도
+   * 상품군 분류결과 연결
+   */
+  for (
+    const row
+    of productRows
+  ) {
+
+    const result =
+      resultMap.get(
+        makeFamilyKey(
+          row
+        )
+      );
+
+
+    if (!result) {
+      continue;
+    }
+
+
+    row['규칙분류'] =
+      result.type;
+
+
+    row['규칙분류근거'] =
+      result.reason;
+
+
+    row['신규급부목록'] =
+      result.newBenefits;
+
+
+    row['AI대상여부'] =
+      result.aiTarget;
+
+
+    row['AI대상사유'] =
+      result.aiReason;
+
+
+    row['AI보완상태'] =
+      result.aiTarget === 'Y'
+        ? '대기'
+        : '비대상';
+  }
+
+
+  /*
+   * 상품군목록 교체
+   */
   replaceSheet(
     workbook,
     '상품군목록',
@@ -1284,36 +1782,8 @@ async function main() {
 
 
   /*
-   * 상품목록에도 동일 결과 반영
+   * 상품목록 교체
    */
-  for (const row of productRows) {
-
-    const result =
-      resultMap.get(
-        makeFamilyKey(row)
-      );
-
-    if (!result) {
-      continue;
-    }
-
-    row['규칙분류'] =
-      result.type;
-
-    row['규칙분류근거'] =
-      result.reason;
-
-    row['신규급부목록'] =
-      result.newBenefitText;
-
-    row['AI대상여부'] =
-      result.aiTarget;
-
-    row['AI대상사유'] =
-      result.aiReason;
-  }
-
-
   replaceSheet(
     workbook,
     '상품목록',
@@ -1321,45 +1791,39 @@ async function main() {
   );
 
 
-  const summaryMap =
-    new Map();
-
-
-  for (const row of familyRows) {
-
-    const key =
-      row['규칙분류'];
-
-    summaryMap.set(
-      key,
-      (
-        summaryMap.get(key) || 0
-      ) + 1
-    );
-  }
-
+  // ==========================================================
+  // 규칙분류 요약
+  // ==========================================================
 
   const summaryRows = [
+
     {
       구분:
         '전체 상품군',
+
       건수:
         familyRows.length
     },
 
     {
       구분:
-        'AI 대상 상품군',
+        'AI 심층분석 대상',
+
       건수:
-        aiCount
+        aiTargetCount
     },
 
     ...[
-      ...summaryMap.entries()
+      ...classificationCounts
+        .entries()
     ].map(
       ([type, count]) => ({
-        구분: type,
-        건수: count
+
+        구분:
+          type,
+
+        건수:
+          count
       })
     )
   ];
@@ -1372,26 +1836,97 @@ async function main() {
   );
 
 
+  // ==========================================================
+  // AI 대상 목록 시트
+  // ==========================================================
+
+  const aiTargetRows =
+    familyRows
+      .filter(
+        row =>
+          row[
+            'AI대상여부'
+          ] === 'Y'
+      )
+      .map(
+        row => ({
+
+          조사월:
+            row['조사월'],
+
+          보험회사명:
+            canonicalCompany(
+              row['보험회사명']
+            ),
+
+          상품유형:
+            row['상품유형'],
+
+          상품군명:
+            row['상품군명'],
+
+          판매일자:
+            row['판매일자'],
+
+          세부상품명:
+            row['세부상품명'],
+
+          규칙분류:
+            row['규칙분류'],
+
+          규칙분류근거:
+            row['규칙분류근거'],
+
+          신규급부목록:
+            row['신규급부목록'],
+
+          AI대상사유:
+            row['AI대상사유']
+        })
+      );
+
+
+  replaceSheet(
+    workbook,
+    'AI분석대상',
+    aiTargetRows
+  );
+
+
+  /*
+   * 파일 저장
+   */
   XLSX.writeFile(
     workbook,
     monthlyPath
   );
 
 
+  /*
+   * 누적 DB도 갱신
+   */
   updateDbRules(
     targetMonth,
     resultMap
   );
 
 
+  /*
+   * Drive 월별 통합본 업로드
+   */
   await uploadFile(
+
     monthlyPath,
+
     path.basename(
       monthlyPath
     )
   );
 
 
+  /*
+   * Drive 누적 DB 업로드
+   */
   const dbPath =
     path.join(
       OUTPUT_DIR,
@@ -1412,26 +1947,92 @@ async function main() {
   }
 
 
+  // ==========================================================
+  // 로그
+  // ==========================================================
+
   console.log('');
+  console.log(
+    '============================'
+  );
+
   console.log(
     `전체 상품군: ${familyRows.length}개`
   );
 
+
+  for (
+    const [
+      type,
+      count
+    ]
+    of classificationCounts
+  ) {
+
+    console.log(
+      `${type}: ${count}개`
+    );
+  }
+
+
   console.log(
-    `AI 심층분석 대상: ${aiCount}개`
+    `AI 심층분석 대상: ${aiTargetCount}개`
+  );
+
+
+  console.log(
+    'AI 대상 고정회사:'
+  );
+
+
+  AI_TARGET_COMPANIES
+    .forEach(
+      company => {
+
+        const count =
+          aiTargetRows
+            .filter(
+              row =>
+                row[
+                  '보험회사명'
+                ] === company
+            )
+            .length;
+
+
+        console.log(
+          `- ${company}: ${count}개`
+        );
+      }
+    );
+
+
+  console.log(
+    '============================'
   );
 
   console.log(
-    '규칙분류 완료'
+    '전체 생보사 규칙분류 완료'
   );
 }
 
+
+// ============================================================
+// Run
+// ============================================================
 
 main()
   .catch(
     error => {
 
-      console.error(error);
+      console.error(
+        'rule_classify.js 실행 실패'
+      );
+
+      console.error(
+        error
+      );
+
       process.exit(1);
     }
   );
