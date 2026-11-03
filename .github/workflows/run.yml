@@ -9,42 +9,97 @@ on:
         type: string
 
   schedule:
-    # 매월 1일 오전 9시 10분 KST
-    - cron: '10 0 1 * *'
+    # 매일 UTC 22:00에 호출
+    # = 한국시간(KST) 다음날 오전 7:00
+    # 아래 Check monthly schedule 단계에서
+    # 한국시간 기준 매월 1일에만 실제 작업 실행
+    - cron: '0 22 * * *'
 
 
 jobs:
   scrape:
-
     runs-on: ubuntu-latest
-
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
 
+      # =====================================================
+      # 자동 실행일 확인
+      # =====================================================
+
+      - name: Check monthly schedule
+        id: schedule_check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "수동 실행이므로 날짜와 관계없이 실행합니다."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+
+          elif [ "$(TZ=Asia/Seoul date +%d)" = "01" ]; then
+            echo "한국시간 기준 매월 1일입니다."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+
+          else
+            echo "한국시간 기준 1일이 아니므로 작업을 실행하지 않습니다."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+      # =====================================================
+      # Repository
+      # =====================================================
+
       - name: Checkout repository
+        if: steps.schedule_check.outputs.run == 'true'
         uses: actions/checkout@v4
 
 
+      # =====================================================
+      # Node.js
+      # =====================================================
+
       - name: Set up Node.js
+        if: steps.schedule_check.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '24'
 
 
       - name: Install dependencies
+        if: steps.schedule_check.outputs.run == 'true'
         run: npm install
 
 
+      # =====================================================
+      # Playwright
+      # =====================================================
+
       - name: Install Chromium
+        if: steps.schedule_check.outputs.run == 'true'
         run: npx playwright install --with-deps chromium
 
 
+      # =====================================================
+      # 1. 생명보험협회 13개 원본 수집
+      #
+      # 전체 생명보험사 대상
+      # =====================================================
+
       - name: Download 13 KLIA Excel files
+        if: steps.schedule_check.outputs.run == 'true'
         run: node scraper.js
 
 
+      # =====================================================
+      # 2. 월별 상품 통합
+      #
+      # 전체 생명보험사 대상
+      # 원본 → 월별 통합 XLSX
+      # Google Drive 원본/통합본 저장
+      # =====================================================
+
       - name: Merge monthly products and upload to Drive
+        if: steps.schedule_check.outputs.run == 'true'
         env:
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
@@ -52,7 +107,21 @@ jobs:
         run: node process_upload.js
 
 
+      # =====================================================
+      # 3. 상품군 정리 + 누적 DB
+      #
+      # 전체 생명보험사 대상
+      #
+      # - 종/형
+      # - 표준형
+      # - 해약환급금 미지급형
+      # - 버전번호
+      #
+      # 등을 묶어 실제 상품군 단위로 정리
+      # =====================================================
+
       - name: Build cumulative product DB
+        if: steps.schedule_check.outputs.run == 'true'
         env:
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
@@ -60,23 +129,77 @@ jobs:
         run: node build_db.js
 
 
-      - name: AI classify products with Google Search
+      # =====================================================
+      # 4. 전체 생보사 규칙 기반 분류
+      #
+      # 전체 생명보험사 상품을 대상으로
+      #
+      # - 신규상품후보
+      # - 신규급부·특약후보
+      # - 상품개정후보
+      # - 동일상품·유형변경
+      # - 확인필요
+      #
+      # 로 먼저 분류
+      # =====================================================
+
+      - name: Rule classify all life insurance products
+        if: steps.schedule_check.outputs.run == 'true'
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-2.5-flash-lite
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
           TARGET_MONTH: ${{ github.event.inputs.target_month }}
+        run: node rule_classify.js
+
+
+      # =====================================================
+      # 5. AI 보완
+      #
+      # AI 대상 회사는 아래 5개사로 고정
+      #
+      # - 삼성생명
+      # - 한화생명
+      # - 교보생명
+      # - 신한라이프
+      # - NH농협생명
+      #
+      # 그중에서도
+      #
+      # - 신규상품후보
+      # - 신규급부·특약후보
+      #
+      # 만 AI + Google Search로 추가 확인
+      # =====================================================
+
+      - name: AI supplement selected top 5 insurers
+        if: steps.schedule_check.outputs.run == 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash-lite
+
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
+
+          TARGET_MONTH: ${{ github.event.inputs.target_month }}
+
         run: node ai_classify.js
 
 
+      # =====================================================
+      # 6. GitHub Artifact 보관
+      # =====================================================
+
       - name: Save run artifacts
-        if: always()
+        if: always() && steps.schedule_check.outputs.run == 'true'
         uses: actions/upload-artifact@v4
+
         with:
           name: klia-excel-files
+
           path: |
             downloads/
             output/
+
           if-no-files-found: warn
+
           retention-days: 7
