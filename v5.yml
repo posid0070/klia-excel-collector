@@ -1,0 +1,99 @@
+name: V5 민영사 신상품 동향
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_month:
+        description: '대상월 (YYYY-MM)'
+        required: true
+        type: string
+      send_mail:
+        description: '메일 발송'
+        required: true
+        default: false
+        type: boolean
+
+  schedule:
+    - cron: '0 22 * * *'
+
+jobs:
+  v5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check monthly schedule
+        id: schedule_check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(TZ=Asia/Seoul date +%d)" = "01" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.schedule_check.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        if: steps.schedule_check.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        if: steps.schedule_check.outputs.run == 'true'
+        run: npm install
+
+      - name: Install Chromium
+        if: steps.schedule_check.outputs.run == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Set target month
+        if: steps.schedule_check.outputs.run == 'true'
+        id: target
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "month=${{ inputs.target_month }}" >> "$GITHUB_OUTPUT"
+            echo "send_mail=${{ inputs.send_mail }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "month=$(TZ=Asia/Seoul date -d '1 month ago' +%Y-%m)" >> "$GITHUB_OUTPUT"
+            echo "send_mail=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download 13 KLIA Excel files
+        if: steps.schedule_check.outputs.run == 'true'
+        env:
+          TARGET_MONTH: ${{ steps.target.outputs.month }}
+        run: node scraper.js
+
+      - name: Build V5 integrated Excel
+        if: steps.schedule_check.outputs.run == 'true'
+        env:
+          TARGET_MONTH: ${{ steps.target.outputs.month }}
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          UPLOAD_SECRET: ${{ secrets.UPLOAD_SECRET }}
+        run: node v5/process_v5.js
+
+      - name: Build V5 newsletter
+        if: steps.schedule_check.outputs.run == 'true'
+        env:
+          TARGET_MONTH: ${{ steps.target.outputs.month }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash-lite
+          V5_MAIL_URL: ${{ secrets.V5_MAIL_URL }}
+          V5_MAIL_SECRET: ${{ secrets.V5_MAIL_SECRET }}
+          SEND_MAIL: ${{ steps.target.outputs.send_mail }}
+        run: node v5/newsletter_v5.js
+
+      - name: Upload V5 artifact
+        if: steps.schedule_check.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-${{ steps.target.outputs.month }}
+          path: |
+            output/*_V5_*
