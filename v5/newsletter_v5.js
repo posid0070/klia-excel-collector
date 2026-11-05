@@ -6,17 +6,30 @@ const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_DIR = path.join(ROOT, 'output');
 
 const TARGET_MONTH = String(process.env.TARGET_MONTH || '').trim();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
-const V5_MAIL_URL = process.env.V5_MAIL_URL || '';
-const V5_MAIL_SECRET = process.env.V5_MAIL_SECRET || '';
+const GEMINI_API_KEY =
+  process.env.GEMINI_API_KEY || '';
+
+const GEMINI_MODEL =
+  process.env.GEMINI_MODEL ||
+  'gemini-3.5-flash-lite';
+
+const V5_MAIL_URL =
+  process.env.V5_MAIL_URL || '';
+
+const V5_MAIL_SECRET =
+  process.env.V5_MAIL_SECRET || '';
 
 const SEND_MAIL =
-  String(process.env.SEND_MAIL || 'false').toLowerCase() === 'true';
+  String(
+    process.env.SEND_MAIL || 'false'
+  ).toLowerCase() === 'true';
+
 
 if (!/^\d{4}-\d{2}$/.test(TARGET_MONTH)) {
-  throw new Error('TARGET_MONTH는 YYYY-MM 형식이어야 합니다.');
+  throw new Error(
+    'TARGET_MONTH는 YYYY-MM 형식이어야 합니다.'
+  );
 }
 
 
@@ -46,7 +59,7 @@ const JSON_FILE = path.join(
 
 
 /* =========================================================
-   생명보험사
+   생명보험사 키워드
 ========================================================= */
 
 const LIFE_COMPANY_KEYWORDS = [
@@ -215,6 +228,7 @@ function seededPick(
   const pool =
     [...items];
 
+
   const rng =
     mulberry32(
       makeSeed(
@@ -222,7 +236,9 @@ function seededPick(
       )
     );
 
+
   const picked = [];
+
 
   while (
     pool.length &&
@@ -235,6 +251,7 @@ function seededPick(
         pool.length
       );
 
+
     picked.push(
       pool.splice(
         index,
@@ -244,6 +261,7 @@ function seededPick(
 
   }
 
+
   return picked;
 
 }
@@ -252,6 +270,7 @@ function seededPick(
 /* =========================================================
    보험신보 작성일 파싱
 
+   예)
    10-14 09:00
    →
    2026-10-14
@@ -264,17 +283,20 @@ function parseInsweekDate(text) {
       /(\d{1,2})-(\d{1,2})\s+\d{1,2}:\d{2}/
     );
 
+
   if (!m) {
 
     return '';
 
   }
 
+
   const year =
     TARGET_MONTH.slice(
       0,
       4
     );
+
 
   return (
     `${year}-` +
@@ -290,7 +312,7 @@ function parseInsweekDate(text) {
 
 
 /* =========================================================
-   보험신보 신상품 목록 URL
+   보험신보 신상품 페이지 기본 URL
 ========================================================= */
 
 function insweekBaseUrl() {
@@ -305,105 +327,144 @@ function insweekBaseUrl() {
 
 
 /* =========================================================
-   보험신보 페이지 번호 실제 클릭
+   보험신보 실제 pagination URL 읽기
+
+   중요:
+   다른 pagination을 잘못 잡지 않도록
+
+   ul.pagination[aria-label="Pagination"]
+   +
+   sc_sub_section_code=S2N19
+
+   조건을 모두 사용함
 ========================================================= */
 
-async function clickPageNumber(
-  page,
-  pageNo
-) {
+async function getInsweekPageUrls(page) {
 
-  const regex =
-    new RegExp(
-      `^\\s*${pageNo}\\s*$`
-    );
+  await page.goto(
+    insweekBaseUrl(),
+    {
+      waitUntil:
+        'domcontentloaded',
 
-
-  const candidates =
-    page
-      .locator('a')
-      .filter({
-        hasText: regex
-      });
-
-
-  const count =
-    await candidates.count();
-
-
-  console.log(
-    `페이지번호 ${pageNo} 링크 후보: ${count}개`
+      timeout:
+        30000
+    }
   );
 
 
-  for (
-    let i = 0;
-    i < count;
-    i++
-  ) {
-
-    const link =
-      candidates.nth(i);
+  await page.waitForTimeout(
+    1000
+  );
 
 
-    const visible =
-      await link
-        .isVisible()
-        .catch(
-          () => false
-        );
+  const hrefs =
+    await page
 
+      .locator(
+        'ul.pagination[aria-label="Pagination"] ' +
+        'a.pagination-link[href*="sc_sub_section_code=S2N19"]'
+      )
 
-    if (!visible) {
-
-      continue;
-
-    }
-
-
-    const href =
-      await link
-        .getAttribute(
-          'href'
-        )
-        .catch(
-          () => null
-        );
-
-
-    const onclick =
-      await link
-        .getAttribute(
-          'onclick'
-        )
-        .catch(
-          () => null
-        );
-
-
-    console.log(
-      `페이지 ${pageNo} 링크 발견 | href=${href} | onclick=${onclick}`
-    );
-
-
-    try {
-
-      await link.click({
-        timeout: 10000
-      });
-
-
-      await page.waitForTimeout(
-        1200
+      .evaluateAll(
+        links =>
+          links.map(
+            a =>
+              a.href
+          )
       );
 
 
-      return true;
+  const pageUrls =
+    new Map();
+
+
+  /*
+    1페이지는 현재 기본 주소
+  */
+
+  pageUrls.set(
+    1,
+    insweekBaseUrl()
+  );
+
+
+  /*
+    실제 사이트에서 제공하는
+    2페이지 이후 URL 읽기
+  */
+
+  for (
+    const href
+    of hrefs
+  ) {
+
+    try {
+
+      const url =
+        new URL(
+          href
+        );
+
+
+      /*
+        반드시 신상품 카테고리
+      */
+
+      if (
+        url.searchParams.get(
+          'sc_sub_section_code'
+        ) !==
+        'S2N19'
+      ) {
+
+        continue;
+
+      }
+
+
+      /*
+        반드시 view_type=sm
+      */
+
+      if (
+        url.searchParams.get(
+          'view_type'
+        ) !==
+        'sm'
+      ) {
+
+        continue;
+
+      }
+
+
+      const pageNo =
+        Number(
+          url.searchParams.get(
+            'page'
+          )
+        );
+
+
+      if (
+        Number.isFinite(
+          pageNo
+        ) &&
+        pageNo >= 2
+      ) {
+
+        pageUrls.set(
+          pageNo,
+          href
+        );
+
+      }
 
     } catch (e) {
 
       console.log(
-        `페이지 ${pageNo} 링크 클릭 실패: ${e.message}`
+        `페이지 URL 해석 실패: ${href}`
       );
 
     }
@@ -411,13 +472,49 @@ async function clickPageNumber(
   }
 
 
-  return false;
+  /*
+    확인용 로그
+  */
+
+  console.log(
+    '보험신보 pagination 확인'
+  );
+
+
+  for (
+    const [
+      pageNo,
+      url
+    ]
+    of pageUrls
+  ) {
+
+    if (
+      pageNo <= 3
+    ) {
+
+      console.log(
+        `  ${pageNo}페이지 → ${url}`
+      );
+
+    }
+
+  }
+
+
+  return pageUrls;
 
 }
 
 
 /* =========================================================
-   현재 화면 기사 목록 추출
+   현재 보험신보 목록 페이지에서
+
+   작성일
+   제목
+   URL
+
+   추출
 ========================================================= */
 
 async function extractCurrentList(
@@ -429,6 +526,10 @@ async function extractCurrentList(
 
       const results = [];
 
+
+      /*
+        보험신보 작성일
+      */
 
       const dateNodes =
         Array.from(
@@ -477,9 +578,9 @@ async function extractCurrentList(
 
 
         /*
-          날짜 영역에서
+          날짜가 들어있는 영역에서
           부모를 올라가면서
-          기사 링크 탐색
+          같은 기사 링크 탐색
         */
 
         for (
@@ -618,19 +719,59 @@ async function collectInsweekList(
 
   try {
 
+    /*
+      먼저 사이트가 실제로 제공하는
+      pagination URL을 읽는다.
+
+      total=2120 같은 숫자는
+      직접 코드에 적지 않음.
+    */
+
+    const pageUrls =
+      await getInsweekPageUrls(
+        page
+      );
+
+
+    /*
+      1~3페이지 읽기
+    */
+
     for (
       let pageNo = 1;
       pageNo <= 3;
       pageNo++
     ) {
 
-      /*
-        매 페이지마다
-        1페이지 기본 주소로 다시 진입
-      */
+      const targetUrl =
+        pageUrls.get(
+          pageNo
+        );
+
+
+      if (
+        !targetUrl
+      ) {
+
+        throw new Error(
+          `보험신보 신상품 ${pageNo}페이지 URL을 찾지 못했습니다.`
+        );
+
+      }
+
+
+      console.log(
+        `보험신보 ${pageNo}페이지 확인`
+      );
+
+
+      console.log(
+        `이동 URL: ${targetUrl}`
+      );
+
 
       await page.goto(
-        insweekBaseUrl(),
+        targetUrl,
         {
 
           waitUntil:
@@ -645,45 +786,6 @@ async function collectInsweekList(
 
       await page.waitForTimeout(
         1000
-      );
-
-
-      /*
-        2, 3페이지는
-        실제 번호 링크 클릭
-      */
-
-      if (
-        pageNo > 1
-      ) {
-
-        console.log(
-          `보험신보 ${pageNo}페이지 이동 시도`
-        );
-
-
-        const clicked =
-          await clickPageNumber(
-            page,
-            pageNo
-          );
-
-
-        if (
-          !clicked
-        ) {
-
-          throw new Error(
-            `보험신보 ${pageNo}페이지 링크를 찾지 못했습니다.`
-          );
-
-        }
-
-      }
-
-
-      console.log(
-        `보험신보 ${pageNo}페이지 확인`
       );
 
 
@@ -704,7 +806,8 @@ async function collectInsweekList(
 
 
       /*
-        페이지별 앞 5건 확인
+        실제로 페이지가 달라졌는지
+        앞 5건 출력
       */
 
       for (
@@ -723,7 +826,7 @@ async function collectInsweekList(
 
 
       /*
-        대상월 기사만 저장
+        대상월 기사만 수집
       */
 
       for (
@@ -771,7 +874,7 @@ async function collectInsweekList(
 
 
         /*
-          같은 URL 중복 제거
+          URL 기준 중복 제거
         */
 
         if (
@@ -840,7 +943,7 @@ async function collectInsweekList(
 
 
 /* =========================================================
-   기사 본문 수집
+   보험신보 기사 본문 읽기
 ========================================================= */
 
 async function enrichArticles(
@@ -1014,7 +1117,7 @@ function filterLifeInsuranceArticles(
 
 
         /*
-          제목에 생보사명 존재
+          제목에 생명보험사명 존재
         */
 
         const titleHasLifeCompany =
@@ -1027,7 +1130,7 @@ function filterLifeInsuranceArticles(
 
 
         /*
-          본문 포함 생보사명 존재
+          본문에 생명보험사명 존재
         */
 
         const bodyHasLifeCompany =
@@ -1050,7 +1153,7 @@ function filterLifeInsuranceArticles(
 
 
         /*
-          제목 자체가 명확한 손보 기사면 제외
+          제목 자체가 손보기사면 제외
         */
 
         const titleHasExcludedKeyword =
@@ -1101,11 +1204,11 @@ function filterLifeInsuranceArticles(
 
 
 /* =========================================================
-   기사 4개 선정
+   보험신보 4건 선정
 
-   1~10일 1개
-   11~20일 2개
-   21~말일 1개
+   1~10일  : 1건
+   11~20일 : 2건
+   21~말일 : 1건
 ========================================================= */
 
 function selectFourArticles(
@@ -1201,10 +1304,11 @@ function selectFourArticles(
 
 
   /*
-    중복 제거
+    중복 URL 제거
   */
 
   const uniquePicked = [];
+
 
   const used =
     new Set();
@@ -1239,8 +1343,8 @@ function selectFourArticles(
 
 
   /*
-    4건보다 적으면
-    다른 기사에서 보충
+    특정 구간에 기사가 부족하면
+    나머지 기사에서 보충
   */
 
   if (
@@ -1283,7 +1387,7 @@ function selectFourArticles(
 
 
 /* =========================================================
-   Gemini 응답 추출
+   Gemini 응답 텍스트
 ========================================================= */
 
 function extractGeminiText(
@@ -1297,13 +1401,16 @@ function extractGeminiText(
 
 
   return parts
+
     .map(
       p =>
         p.text || ''
     )
+
     .join(
       '\n'
     )
+
     .trim();
 
 }
@@ -1375,7 +1482,7 @@ function parseJsonArray(
 
 
 /* =========================================================
-   Gemini 기사 요약
+   Gemini 기사 4건 요약
 ========================================================= */
 
 async function summarizeWithGemini(
@@ -1563,7 +1670,7 @@ ${source}
 
 
 /* =========================================================
-   생보협회 공시상품 HTML
+   생보협회 공시상품 카드
 ========================================================= */
 
 function buildDisclosureCards(
@@ -1571,6 +1678,7 @@ function buildDisclosureCards(
 ) {
 
   return samples
+
     .map(
       (
         item,
@@ -1730,6 +1838,7 @@ function buildDisclosureCards(
 
 `
     )
+
     .join(
       ''
     );
@@ -1738,7 +1847,7 @@ function buildDisclosureCards(
 
 
 /* =========================================================
-   보험신보 기사 HTML
+   보험신보 카드
 ========================================================= */
 
 function buildNewsCards(
@@ -1747,6 +1856,7 @@ function buildNewsCards(
 ) {
 
   return articles
+
     .map(
       (
         article,
@@ -1764,7 +1874,9 @@ function buildNewsCards(
 
           ||
 
-          summaries[index]
+          summaries[
+            index
+          ]
 
           ||
 
@@ -1973,6 +2085,7 @@ function buildNewsCards(
 
       }
     )
+
     .join(
       ''
     );
@@ -2215,7 +2328,8 @@ ${monthNumber}월 생명보험협회 판매일자 기준
 
 이 확인되었습니다.
 
-동일 상품이 보험기간·급부 등에 따라 여러 행으로 구성된 경우
+동일 상품이 보험기간·급부 등에 따라
+여러 행으로 구성된 경우
 상품 수는 1건으로 계산했습니다.
 
 </p>
@@ -2438,7 +2552,7 @@ ${newsCards}
 
 
 /* =========================================================
-   메일 발송
+   Apps Script 메일 발송
 ========================================================= */
 
 async function sendMail(
@@ -2452,6 +2566,7 @@ async function sendMail(
     console.log(
       '메일 발송 건너뜀: SEND_MAIL=false'
     );
+
 
     return;
 
@@ -2627,7 +2742,10 @@ async function main() {
 
   try {
 
-    /* 보험신보 목록 */
+    /*
+      1.
+      보험신보 대상월 기사 목록
+    */
 
     const list =
       await collectInsweekList(
@@ -2646,12 +2764,15 @@ async function main() {
     }
 
 
+    /*
+      2.
+      대상월 기사 본문 수집
+    */
+
     console.log(
       `보험신보 대상월 기사 본문 수집 시작: ${list.length}건`
     );
 
-
-    /* 본문 수집 */
 
     const enriched =
       await enrichArticles(
@@ -2660,7 +2781,10 @@ async function main() {
       );
 
 
-    /* 생명보험 기사 필터 */
+    /*
+      3.
+      생명보험 기사만
+    */
 
     const lifeArticles =
       filterLifeInsuranceArticles(
@@ -2679,7 +2803,10 @@ async function main() {
     }
 
 
-    /* 4건 선정 */
+    /*
+      4.
+      4건 선정
+    */
 
     selected =
       selectFourArticles(
@@ -2740,11 +2867,12 @@ async function main() {
       `Gemini 기사 요약 완료: ${summaries.length}건`
     );
 
+
   } catch (e) {
 
     /*
-      Gemini 실패해도
-      뉴스레터 자체는 생성
+      Gemini 실패 시에도
+      HTML 생성은 진행
     */
 
     console.log(
