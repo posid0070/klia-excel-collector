@@ -18,9 +18,9 @@ if (!/^\d{4}-\d{2}$/.test(TARGET_MONTH)) {
 }
 
 const META_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_V5_meta.json`);
-const EXCEL_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_V5_생보협회_상품통합.xlsx`);
-const HTML_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_V5_민영사_신상품동향.html`);
-const JSON_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_V5_newsletter.json`);
+const EXCEL_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_생보협회_상품_통합.xlsx`);
+const HTML_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_민영사_신상품동향.html`);
+const JSON_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_newsletter.json`);
 
 const LIFE_COMPANY_KEYWORDS = [
   '삼성생명', '한화생명', '교보생명', '신한라이프', 'NH농협생명', '농협생명',
