@@ -96,4 +96,4 @@ jobs:
         with:
           name: v5-${{ steps.target.outputs.month }}
           path: |
-            output/*_V5_*
+            output/*
