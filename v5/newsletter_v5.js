@@ -2,107 +2,427 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
+
+/* =========================================================
+   기본 설정
+========================================================= */
+
 const ROOT = path.resolve(__dirname, '..');
-const OUTPUT_DIR = path.join(ROOT, 'output');
 
-const TARGET_MONTH = String(process.env.TARGET_MONTH || '').trim();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const OUTPUT_DIR = path.join(
+  ROOT,
+  'output'
+);
 
-const V5_MAIL_URL = process.env.V5_MAIL_URL || '';
-const V5_MAIL_SECRET = process.env.V5_MAIL_SECRET || '';
-const SEND_MAIL = String(process.env.SEND_MAIL || 'false').toLowerCase() === 'true';
+const TARGET_MONTH = String(
+  process.env.TARGET_MONTH || ''
+).trim();
+
+const GEMINI_API_KEY =
+  process.env.GEMINI_API_KEY || '';
+
+const GEMINI_MODEL =
+  process.env.GEMINI_MODEL ||
+  'gemini-3.5-flash-lite';
+
+const V5_MAIL_URL =
+  process.env.V5_MAIL_URL || '';
+
+const V5_MAIL_SECRET =
+  process.env.V5_MAIL_SECRET || '';
+
+const SEND_MAIL =
+  String(
+    process.env.SEND_MAIL || 'false'
+  ).toLowerCase() === 'true';
+
 
 if (!/^\d{4}-\d{2}$/.test(TARGET_MONTH)) {
-  throw new Error('TARGET_MONTH는 YYYY-MM 형식이어야 합니다.');
+
+  throw new Error(
+    'TARGET_MONTH는 YYYY-MM 형식이어야 합니다.'
+  );
+
 }
 
-const META_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_V5_meta.json`);
-const EXCEL_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_생보협회_상품_통합.xlsx`);
-const HTML_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_민영사_신상품동향.html`);
-const JSON_FILE = path.join(OUTPUT_DIR, `${TARGET_MONTH}_newsletter.json`);
+
+/* =========================================================
+   파일명
+
+   네가 변경한 이름 반영
+========================================================= */
+
+const META_FILE = path.join(
+  OUTPUT_DIR,
+  `${TARGET_MONTH}_V5_meta.json`
+);
+
+const EXCEL_FILE = path.join(
+  OUTPUT_DIR,
+  `${TARGET_MONTH}_생보협회_상품_통합.xlsx`
+);
+
+const HTML_FILE = path.join(
+  OUTPUT_DIR,
+  `${TARGET_MONTH}_민영사_신상품동향.html`
+);
+
+const JSON_FILE = path.join(
+  OUTPUT_DIR,
+  `${TARGET_MONTH}_newsletter.json`
+);
+
+
+/* =========================================================
+   생명보험사 키워드
+========================================================= */
 
 const LIFE_COMPANY_KEYWORDS = [
-  '삼성생명', '한화생명', '교보생명', '신한라이프', 'NH농협생명', '농협생명',
-  '동양생명', 'ABL생명', '흥국생명', '미래에셋생명', '메트라이프생명', '메트라이프',
-  'KB라이프', 'KDB생명', '푸본현대생명', '라이나생명', 'AIA생명', '처브라이프',
-  '하나생명', 'DB생명', 'BNP파리바카디프생명', '카디프생명', 'IBK연금보험',
+
+  '삼성생명',
+  '한화생명',
+  '교보생명',
+  '신한라이프',
+
+  'NH농협생명',
+  '농협생명',
+
+  '동양생명',
+  'ABL생명',
+  '흥국생명',
+
+  '미래에셋생명',
+
+  '메트라이프생명',
+  '메트라이프',
+
+  'KB라이프',
+  'KDB생명',
+
+  '푸본현대생명',
+
+  '라이나생명',
+
+  'AIA생명',
+
+  '처브라이프',
+
+  '하나생명',
+
+  'DB생명',
+
+  'BNP파리바카디프생명',
+  '카디프생명',
+
+  'IBK연금보험',
+
   '교보라이프플래닛'
+
 ];
+
+
+/* =========================================================
+   제외 키워드
+========================================================= */
 
 const EXCLUDE_KEYWORDS = [
-  '손해보험', '화재', '손보', '변액', '퇴직연금', '연금저축', '실손'
+
+  '손해보험',
+  '화재',
+  '손보',
+
+  '변액',
+
+  '퇴직연금',
+
+  '연금저축',
+
+  '실손'
+
 ];
 
+
+/* =========================================================
+   문자열 정리
+========================================================= */
+
 function clean(v) {
+
   return String(v ?? '')
-    .replace(/\u00a0/g, ' ')
-    .replace(/\r/g, ' ')
-    .replace(/\n+/g, ' ')
-    .replace(/\s+/g, ' ')
+
+    .replace(
+      /\u00a0/g,
+      ' '
+    )
+
+    .replace(
+      /\r/g,
+      ' '
+    )
+
+    .replace(
+      /\n+/g,
+      ' '
+    )
+
+    .replace(
+      /\s+/g,
+      ' '
+    )
+
     .trim();
+
 }
+
+
+/* =========================================================
+   HTML Escape
+========================================================= */
 
 function escapeHtml(v) {
+
   return clean(v)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+
+    .replace(
+      /&/g,
+      '&amp;'
+    )
+
+    .replace(
+      /</g,
+      '&lt;'
+    )
+
+    .replace(
+      />/g,
+      '&gt;'
+    )
+
+    .replace(
+      /"/g,
+      '&quot;'
+    );
+
 }
+
+
+/* =========================================================
+   Seed 랜덤
+
+   같은 달 다시 실행하면
+   같은 기사 / 상품이 선정되도록 함
+========================================================= */
 
 function makeSeed(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+
+  let h =
+    2166136261;
+
+
+  for (
+    let i = 0;
+    i < str.length;
+    i++
+  ) {
+
+    h ^=
+      str.charCodeAt(i);
+
+    h =
+      Math.imul(
+        h,
+        16777619
+      );
+
   }
+
+
   return h >>> 0;
+
 }
+
 
 function mulberry32(seed) {
+
   return function () {
-    let t = seed += 0x6D2B79F5;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+
+    let t =
+      seed +=
+        0x6D2B79F5;
+
+
+    t =
+      Math.imul(
+        t ^ (t >>> 15),
+        t | 1
+      );
+
+
+    t ^=
+      t +
+      Math.imul(
+        t ^ (t >>> 7),
+        t | 61
+      );
+
+
+    return (
+      (
+        (
+          t ^
+          (t >>> 14)
+        ) >>> 0
+      )
+      /
+      4294967296
+    );
+
   };
+
 }
 
-function seededPick(items, count, seedText) {
-  const pool = [...items];
-  const rng = mulberry32(makeSeed(seedText));
+
+function seededPick(
+  items,
+  count,
+  seedText
+) {
+
+  const pool =
+    [...items];
+
+
+  const rng =
+    mulberry32(
+      makeSeed(
+        seedText
+      )
+    );
+
+
   const picked = [];
 
-  while (pool.length && picked.length < count) {
-    const i = Math.floor(rng() * pool.length);
-    picked.push(pool.splice(i, 1)[0]);
+
+  while (
+    pool.length &&
+    picked.length < count
+  ) {
+
+    const index =
+      Math.floor(
+        rng() *
+        pool.length
+      );
+
+
+    picked.push(
+      pool.splice(
+        index,
+        1
+      )[0]
+    );
+
   }
 
+
   return picked;
+
 }
+
+
+/* =========================================================
+   보험신보 작성일 파싱
+
+   예:
+   10-14 09:00
+   →
+   2026-10-14
+========================================================= */
 
 function parseInsweekDate(text) {
-  const m = clean(text).match(/(\d{1,2})-(\d{1,2})\s+\d{1,2}:\d{2}/);
-  if (!m) return '';
-  const year = TARGET_MONTH.slice(0, 4);
-  return `${year}-${String(Number(m[1])).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
+
+  const m =
+    clean(text).match(
+      /(\d{1,2})-(\d{1,2})\s+\d{1,2}:\d{2}/
+    );
+
+
+  if (!m) {
+
+    return '';
+
+  }
+
+
+  const year =
+    TARGET_MONTH.slice(
+      0,
+      4
+    );
+
+
+  return (
+
+    `${year}-` +
+
+    `${String(
+      Number(m[1])
+    ).padStart(2, '0')}-` +
+
+    `${String(
+      Number(m[2])
+    ).padStart(2, '0')}`
+
+  );
+
 }
 
-function insweekPageUrl(pageNo) {
-  return `https://www.insweek.co.kr/news/articleList.html?page=${pageNo}&sc_sub_section_code=S2N19&view_type=sm`;
+
+/* =========================================================
+   보험신보 페이지 URL
+========================================================= */
+
+function insweekPageUrl(
+  pageNo
+) {
+
+  return (
+    'https://www.insweek.co.kr/news/articleList.html' +
+    `?page=${pageNo}` +
+    '&sc_sub_section_code=S2N19' +
+    '&view_type=sm'
+  );
+
 }
 
-async function collectInsweekList(browser) {
+
+/* =========================================================
+   보험신보 기사 목록 수집
+
+   1~3페이지
+
+   날짜:
+   .altlist-info-item
+
+   기사 URL:
+   articleView.html
+========================================================= */
+
+async function collectInsweekList(
+  browser
+) {
 
   const page =
     await browser.newPage();
 
+
   const start =
     `${TARGET_MONTH}-01`;
 
+
   const end =
     `${TARGET_MONTH}-31`;
+
 
   const map =
     new Map();
@@ -122,13 +442,17 @@ async function collectInsweekList(browser) {
 
 
       await page.goto(
-        insweekPageUrl(pageNo),
+        insweekPageUrl(
+          pageNo
+        ),
         {
+
           waitUntil:
             'domcontentloaded',
 
           timeout:
             30000
+
         }
       );
 
@@ -139,171 +463,173 @@ async function collectInsweekList(browser) {
 
 
       /*
-        핵심 수정
-
-        기존:
-        기사 제목 a태그에서 위로 올라가며
-        날짜를 찾음
-
-        수정:
-        확실하게 존재하는
-        .altlist-info-item 날짜를 먼저 찾고
-
-        그 날짜와 같은 기사 영역 안에서
-        articleView 링크를 찾음
+        날짜 요소를 기준으로
+        같은 기사 영역에서 제목과 URL 탐색
       */
 
       const raw =
-        await page.evaluate(() => {
+        await page.evaluate(
+          () => {
 
-          const results = [];
-
-          const dateNodes =
-            Array.from(
-              document.querySelectorAll(
-                '.altlist-info-item'
-              )
-            );
+            const results = [];
 
 
-          for (
-            const dateEl
-            of dateNodes
-          ) {
+            const dateNodes =
+              Array.from(
+                document.querySelectorAll(
+                  '.altlist-info-item'
+                )
+              );
 
-            const dateText =
-              (
-                dateEl.textContent ||
-                ''
-              ).trim();
-
-
-            /*
-              10-28 09:00
-              같은 작성일만 사용
-            */
-
-            if (
-              !/\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/
-                .test(dateText)
-            ) {
-
-              continue;
-
-            }
-
-
-            let container =
-              dateEl;
-
-
-            let articleLink =
-              null;
-
-
-            /*
-              날짜가 들어있는 영역에서
-              기사 제목 링크를 찾음
-            */
 
             for (
-              let depth = 0;
-              depth < 8;
-              depth++
+              const dateEl
+              of dateNodes
             ) {
 
-              if (!container) {
-                break;
+              const dateText =
+                (
+                  dateEl.textContent ||
+                  ''
+                ).trim();
+
+
+              /*
+                날짜 형태가 아니면 제외
+              */
+
+              if (
+                !/\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/
+                  .test(
+                    dateText
+                  )
+              ) {
+
+                continue;
+
               }
 
 
-              const links =
-                Array.from(
-                  container.querySelectorAll(
-                    'a[href*="articleView.html"]'
+              let container =
+                dateEl;
+
+
+              let selectedLink =
+                null;
+
+
+              /*
+                날짜가 있는 요소에서
+                부모를 올라가면서
+                articleView 링크를 탐색
+              */
+
+              for (
+                let depth = 0;
+                depth < 10;
+                depth++
+              ) {
+
+                if (
+                  !container
+                ) {
+
+                  break;
+
+                }
+
+
+                const links =
+                  Array.from(
+                    container.querySelectorAll(
+                      'a[href*="articleView.html"]'
+                    )
                   )
-                )
 
-                .map(a => ({
-                  element: a,
+                  .map(
+                    a => ({
 
-                  text:
-                    (
-                      a.innerText ||
-                      a.textContent ||
-                      ''
-                    ).trim(),
+                      title:
+                        (
+                          a.innerText ||
+                          a.textContent ||
+                          ''
+                        ).trim(),
 
-                  href:
-                    a.href || ''
-                }))
+                      url:
+                        a.href ||
+                        ''
 
-                .filter(
-                  x =>
-                    x.href &&
-                    x.text &&
-                    x.text.length >= 4
-                );
+                    })
+                  )
+
+                  .filter(
+                    x =>
+                      x.title &&
+                      x.url &&
+                      x.title.length >= 4
+                  );
+
+
+                if (
+                  links.length > 0
+                ) {
+
+                  /*
+                    한 영역 안에 링크가 여러 개면
+                    가장 긴 텍스트를 제목으로 사용
+                  */
+
+                  links.sort(
+                    (a, b) =>
+                      b.title.length -
+                      a.title.length
+                  );
+
+
+                  selectedLink =
+                    links[0];
+
+
+                  break;
+
+                }
+
+
+                container =
+                  container.parentElement;
+
+              }
 
 
               if (
-                links.length
+                !selectedLink
               ) {
 
-                /*
-                  같은 영역에 링크가 여러 개면
-                  가장 제목다운 긴 텍스트 선택
-                */
-
-                links.sort(
-                  (a, b) =>
-                    b.text.length -
-                    a.text.length
-                );
-
-
-                articleLink =
-                  links[0];
-
-                break;
+                continue;
 
               }
 
 
-              container =
-                container.parentElement;
+              results.push({
 
-            }
+                title:
+                  selectedLink.title,
 
+                url:
+                  selectedLink.url,
 
-            if (
-              !articleLink
-            ) {
-
-              continue;
-
-            }
-
-
-            results.push({
-
-              title:
-                articleLink.text,
-
-              url:
-                articleLink.href,
-
-              dateText:
                 dateText
 
-            });
+              });
+
+            }
+
+
+            return results;
 
           }
-
-
-          return results;
-
-        });
+        );
 
 
       console.log(
@@ -312,12 +638,15 @@ async function collectInsweekList(browser) {
 
 
       /*
-        디버깅용으로 앞 5건 출력
+        로그 확인용
       */
 
       for (
         const item
-        of raw.slice(0, 5)
+        of raw.slice(
+          0,
+          5
+        )
       ) {
 
         console.log(
@@ -349,6 +678,10 @@ async function collectInsweekList(browser) {
           );
 
 
+        /*
+          대상월 기사만
+        */
+
         if (
           !articleDate ||
           articleDate < start ||
@@ -366,50 +699,19 @@ async function collectInsweekList(browser) {
           );
 
 
-        /*
-          손보 / 변액 / 실손 등 제외
-        */
-
-        if (
-          EXCLUDE_KEYWORDS.some(
-            k =>
-              title.includes(k)
-          )
-        ) {
-
-          continue;
-
-        }
-
-
-        /*
-          생명보험사 기사만
-        */
-
-        if (
-          !LIFE_COMPANY_KEYWORDS.some(
-            k =>
-              title.includes(k)
-          )
-        ) {
-
-          continue;
-
-        }
-
-
         const url =
-          item.url.split('#')[0];
+          item.url
+            .split('#')[0];
 
 
         /*
-          동일 URL 중복 제거
+          URL 중복 제거
         */
 
         if (
-          !map.has(url) ||
-          title.length >
-            map.get(url).title.length
+          !map.has(
+            url
+          )
         ) {
 
           map.set(
@@ -450,17 +752,254 @@ async function collectInsweekList(browser) {
 
 
   console.log(
-    `보험신보 ${TARGET_MONTH} 생보 신상품 최종 후보: ${results.length}건`
+    `보험신보 ${TARGET_MONTH} 대상월 기사: ${results.length}건`
+  );
+
+
+  return results;
+
+}
+
+
+/* =========================================================
+   보험신보 기사 본문 읽기
+========================================================= */
+
+async function enrichArticles(
+  browser,
+  articles
+) {
+
+  const page =
+    await browser.newPage();
+
+
+  const out = [];
+
+
+  try {
+
+    for (
+      const article
+      of articles
+    ) {
+
+      let body = '';
+
+
+      try {
+
+        await page.goto(
+          article.url,
+          {
+
+            waitUntil:
+              'domcontentloaded',
+
+            timeout:
+              30000
+
+          }
+        );
+
+
+        await page.waitForTimeout(
+          500
+        );
+
+
+        body =
+          await page.evaluate(
+            () => {
+
+              const selectors = [
+
+                '[itemprop="articleBody"]',
+
+                '#article-view-content-div',
+
+                '.article-view-content-div',
+
+                '.article-body',
+
+                '.article-content',
+
+                'article',
+
+                'main'
+
+              ];
+
+
+              for (
+                const selector
+                of selectors
+              ) {
+
+                const el =
+                  document.querySelector(
+                    selector
+                  );
+
+
+                const text =
+                  el &&
+                  (
+                    el.innerText ||
+                    el.textContent ||
+                    ''
+                  ).trim();
+
+
+                if (
+                  text &&
+                  text.length > 100
+                ) {
+
+                  return text;
+
+                }
+
+              }
+
+
+              return (
+                document.body &&
+                document.body.innerText
+              ) || '';
+
+            }
+          );
+
+
+      } catch (e) {
+
+        console.log(
+          `보험신보 본문 실패: ${article.title}`
+        );
+
+        console.log(
+          e.message
+        );
+
+      }
+
+
+      out.push({
+
+        ...article,
+
+        body:
+          clean(
+            body
+          ).slice(
+            0,
+            9000
+          )
+
+      });
+
+    }
+
+  } finally {
+
+    await page.close();
+
+  }
+
+
+  return out;
+
+}
+
+
+/* =========================================================
+   생명보험 기사 필터
+
+   제목뿐 아니라 본문까지 확인
+========================================================= */
+
+function filterLifeInsuranceArticles(
+  articles
+) {
+
+  const results =
+    articles.filter(
+      article => {
+
+        const text =
+          `${article.title} ${article.body}`;
+
+
+        /*
+          명확한 제외 키워드
+        */
+
+        if (
+          EXCLUDE_KEYWORDS.some(
+            keyword =>
+              text.includes(
+                keyword
+              )
+          )
+        ) {
+
+          /*
+            생보사 이름이 명확히 있는 경우는
+            제외키워드가 기사 본문 다른 부분에
+            등장했을 가능성이 있으므로
+            제목 기준 한 번 더 확인
+          */
+
+          const titleHasLifeCompany =
+            LIFE_COMPANY_KEYWORDS.some(
+              keyword =>
+                article.title.includes(
+                  keyword
+                )
+            );
+
+
+          if (
+            !titleHasLifeCompany
+          ) {
+
+            return false;
+
+          }
+
+        }
+
+
+        /*
+          제목 또는 본문에 생명보험사명 존재
+        */
+
+        return (
+          LIFE_COMPANY_KEYWORDS.some(
+            keyword =>
+              text.includes(
+                keyword
+              )
+          )
+        );
+
+      }
+    );
+
+
+  console.log(
+    `보험신보 생명보험 기사 필터 후: ${results.length}건`
   );
 
 
   for (
-    const item
+    const article
     of results
   ) {
 
     console.log(
-      `${item.articleDate} | ${item.title}`
+      `${article.articleDate} | ${article.title}`
     );
 
   }
@@ -470,173 +1009,371 @@ async function collectInsweekList(browser) {
 
 }
 
-              if (dateText) break;
-              parent = parent.parentElement;
-            }
 
-            out.push({
-              title: (a.innerText || a.textContent || '').trim(),
-              url: a.href || '',
-              dateText
-            });
-          }
+/* =========================================================
+   보험신보 기사 4개 선정
 
-          return out;
-        });
+   1~10일  : 1개
+   11~20일 : 2개
+   21~말일 : 1개
 
-      for (const item of raw) {
-        if (!item.url || !item.title || !item.dateText) continue;
+   해당 구간 부족하면
+   남은 기사에서 보충
+========================================================= */
 
-        const articleDate = parseInsweekDate(item.dateText);
-        if (!articleDate || articleDate < start || articleDate > end) continue;
+function selectFourArticles(
+  articles
+) {
 
-        const title = clean(item.title);
+  const bucket1 =
+    articles.filter(
+      article => {
 
-        if (EXCLUDE_KEYWORDS.some(k => title.includes(k))) continue;
-        if (!LIFE_COMPANY_KEYWORDS.some(k => title.includes(k))) continue;
+        const day =
+          Number(
+            article.articleDate.slice(
+              8,
+              10
+            )
+          );
 
-        const url = item.url.split('#')[0];
 
-        if (!map.has(url) || title.length > map.get(url).title.length) {
-          map.set(url, { title, url, articleDate });
-        }
+        return (
+          day >= 1 &&
+          day <= 10
+        );
+
       }
-    }
-  } finally {
-    await page.close();
-  }
+    );
 
-  return [...map.values()].sort((a, b) => a.articleDate.localeCompare(b.articleDate));
-}
 
-function selectFourArticles(articles) {
-  const b1 = articles.filter(a => Number(a.articleDate.slice(8, 10)) <= 10);
-  const b2 = articles.filter(a => {
-    const d = Number(a.articleDate.slice(8, 10));
-    return d >= 11 && d <= 20;
-  });
-  const b3 = articles.filter(a => Number(a.articleDate.slice(8, 10)) >= 21);
+  const bucket2 =
+    articles.filter(
+      article => {
+
+        const day =
+          Number(
+            article.articleDate.slice(
+              8,
+              10
+            )
+          );
+
+
+        return (
+          day >= 11 &&
+          day <= 20
+        );
+
+      }
+    );
+
+
+  const bucket3 =
+    articles.filter(
+      article => {
+
+        const day =
+          Number(
+            article.articleDate.slice(
+              8,
+              10
+            )
+          );
+
+
+        return (
+          day >= 21
+        );
+
+      }
+    );
+
 
   const picked = [
-    ...seededPick(b1, 1, `${TARGET_MONTH}|1-10`),
-    ...seededPick(b2, 2, `${TARGET_MONTH}|11-20`),
-    ...seededPick(b3, 1, `${TARGET_MONTH}|21-end`)
+
+    ...seededPick(
+      bucket1,
+      1,
+      `${TARGET_MONTH}|1-10`
+    ),
+
+    ...seededPick(
+      bucket2,
+      2,
+      `${TARGET_MONTH}|11-20`
+    ),
+
+    ...seededPick(
+      bucket3,
+      1,
+      `${TARGET_MONTH}|21-end`
+    )
+
   ];
 
-  const used = new Set(picked.map(x => x.url));
 
-  if (picked.length < 4) {
-    const remaining = articles.filter(x => !used.has(x.url));
-    picked.push(...seededPick(remaining, 4 - picked.length, `${TARGET_MONTH}|fallback`));
-  }
+  /*
+    중복 URL 제외
+  */
 
-  return picked.slice(0, 4);
-}
+  const uniquePicked = [];
 
-async function enrichArticles(browser, articles) {
-  const page = await browser.newPage();
-  const out = [];
+  const used =
+    new Set();
 
-  try {
-    for (const article of articles) {
-      let body = '';
 
-      try {
-        await page.goto(article.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 30000
-        });
+  for (
+    const item
+    of picked
+  ) {
 
-        await page.waitForTimeout(400);
+    if (
+      used.has(
+        item.url
+      )
+    ) {
 
-        body = await page.evaluate(() => {
-          const selectors = [
-            '[itemprop="articleBody"]',
-            '#article-view-content-div',
-            '.article-view-content-div',
-            '.article-body',
-            '.article-content',
-            'article',
-            'main'
-          ];
+      continue;
 
-          for (const selector of selectors) {
-            const el = document.querySelector(selector);
-            const text = el && (el.innerText || el.textContent || '').trim();
-            if (text) return text;
-          }
-
-          return (document.body && document.body.innerText) || '';
-        });
-
-      } catch (e) {
-        console.log(`보험신보 본문 실패: ${article.title} / ${e.message}`);
-      }
-
-      out.push({ ...article, body: clean(body).slice(0, 9000) });
     }
-  } finally {
-    await page.close();
+
+
+    used.add(
+      item.url
+    );
+
+
+    uniquePicked.push(
+      item
+    );
+
   }
 
-  return out;
+
+  /*
+    4개보다 부족하면
+    다른 구간에서 보충
+  */
+
+  if (
+    uniquePicked.length < 4
+  ) {
+
+    const remaining =
+      articles.filter(
+        article =>
+          !used.has(
+            article.url
+          )
+      );
+
+
+    const additional =
+      seededPick(
+
+        remaining,
+
+        4 -
+          uniquePicked.length,
+
+        `${TARGET_MONTH}|fallback`
+
+      );
+
+
+    uniquePicked.push(
+      ...additional
+    );
+
+  }
+
+
+  return uniquePicked.slice(
+    0,
+    4
+  );
+
 }
 
-function extractGeminiText(data) {
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  return parts.map(p => p.text || '').join('\n').trim();
-}
 
-function parseJsonArray(text) {
-  const s = String(text || '')
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/, '')
-    .replace(/\s*```$/, '')
+/* =========================================================
+   Gemini 응답 텍스트 추출
+========================================================= */
+
+function extractGeminiText(
+  data
+) {
+
+  const parts =
+    data?.candidates?.[0]
+      ?.content
+      ?.parts || [];
+
+
+  return parts
+
+    .map(
+      p =>
+        p.text || ''
+    )
+
+    .join(
+      '\n'
+    )
+
     .trim();
 
-  const first = s.indexOf('[');
-  const last = s.lastIndexOf(']');
-
-  if (first < 0 || last < first) {
-    throw new Error('Gemini JSON 배열을 찾지 못했습니다.');
-  }
-
-  return JSON.parse(s.slice(first, last + 1));
 }
 
-async function summarizeWithGemini(articles) {
-  if (!GEMINI_API_KEY) {
-    return articles.map((a, i) => ({
-      index: i + 1,
-      company: '',
-      product: a.title,
-      feature: 'Gemini API 키가 없어 자동 요약을 실행하지 않았습니다.',
-      implication: '기사 원문을 참고해주세요.'
-    }));
+
+/* =========================================================
+   Gemini JSON 배열 변환
+========================================================= */
+
+function parseJsonArray(
+  text
+) {
+
+  const s =
+    String(
+      text || ''
+    )
+
+      .replace(
+        /^```json\s*/i,
+        ''
+      )
+
+      .replace(
+        /^```\s*/,
+        ''
+      )
+
+      .replace(
+        /\s*```$/,
+        ''
+      )
+
+      .trim();
+
+
+  const first =
+    s.indexOf(
+      '['
+    );
+
+
+  const last =
+    s.lastIndexOf(
+      ']'
+    );
+
+
+  if (
+    first < 0 ||
+    last < first
+  ) {
+
+    throw new Error(
+      'Gemini JSON 배열을 찾지 못했습니다.'
+    );
+
   }
 
-  const source = articles
-    .map((a, i) => `[기사 ${i + 1}]
-기사작성일: ${a.articleDate}
-제목: ${a.title}
-URL: ${a.url}
-본문:
-${a.body}`)
-    .join('\n\n');
 
-  const prompt = `당신은 우체국보험 상품개발 참고용 월간 뉴스레터 편집자입니다.
+  return JSON.parse(
+    s.slice(
+      first,
+      last + 1
+    )
+  );
+
+}
+
+
+/* =========================================================
+   Gemini 기사 요약
+
+   기사 4개를 한 번에 요청
+========================================================= */
+
+async function summarizeWithGemini(
+  articles
+) {
+
+  if (
+    !articles.length
+  ) {
+
+    throw new Error(
+      'Gemini에 전달할 보험신보 기사가 없습니다.'
+    );
+
+  }
+
+
+  if (
+    !GEMINI_API_KEY
+  ) {
+
+    throw new Error(
+      'GEMINI_API_KEY가 없습니다.'
+    );
+
+  }
+
+
+  const source =
+    articles
+
+      .map(
+        (
+          article,
+          index
+        ) => `
+
+[기사 ${index + 1}]
+
+기사작성일:
+${article.articleDate}
+
+제목:
+${article.title}
+
+URL:
+${article.url}
+
+본문:
+${article.body}
+
+`
+      )
+
+      .join(
+        '\n'
+      );
+
+
+  const prompt = `
+
+당신은 우체국보험 상품개발 참고용 월간 뉴스레터를 작성하는 보험상품 분석 담당자입니다.
+
 아래 보험신보 생명보험 신상품 기사들을 기사 내용만 근거로 요약하세요.
 
-규칙:
-- 인터넷 검색 금지
-- 기사에 없는 내용 추정 금지
-- 광고성 표현 제거
-- feature: 상품 핵심 특징 한 문장
-- implication: 특정 우체국보험 상품과 사실 비교하지 말고, 상품개발 관점 시사점 한 문장
-- company: 기사에 나온 보험회사명
-- product: 기사에 나온 실제 상품명
+중요한 규칙:
 
-JSON 배열만 출력:
+1. 인터넷 검색을 하지 마세요.
+2. 제공된 기사 본문에 없는 사실은 만들지 마세요.
+3. 보험회사의 광고성 표현은 최대한 제거하세요.
+4. feature는 해당 상품의 핵심 특징을 한 문장으로 작성하세요.
+5. implication은 특정 우체국보험 상품과 사실 비교하지 마세요.
+6. implication은 우체국보험 상품개발 관점에서 참고할 만한 시사점을 한 문장으로 작성하세요.
+7. company에는 보험회사명을 작성하세요.
+8. product에는 실제 상품명을 작성하세요.
+9. 너무 길게 작성하지 마세요.
+10. 아래 JSON 배열 형식만 출력하세요.
+
 [
   {
     "index": 1,
@@ -647,329 +1384,1444 @@ JSON 배열만 출력:
   }
 ]
 
-${source}`;
+보험신보 기사:
+
+${source}
+
+`;
+
 
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'x-goog-api-key': GEMINI_API_KEY,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json'
+
+  const response =
+    await fetch(
+      url,
+      {
+
+        method:
+          'POST',
+
+        headers: {
+
+          'x-goog-api-key':
+            GEMINI_API_KEY,
+
+          'Content-Type':
+            'application/json'
+
+        },
+
+        body:
+          JSON.stringify({
+
+            contents: [
+
+              {
+
+                role:
+                  'user',
+
+                parts: [
+
+                  {
+                    text:
+                      prompt
+                  }
+
+                ]
+
+              }
+
+            ],
+
+            generationConfig: {
+
+              temperature:
+                0.2,
+
+              responseMimeType:
+                'application/json'
+
+            }
+
+          })
+
       }
-    })
-  });
+    );
 
-  const text = await response.text();
 
-  if (!response.ok) {
-    throw new Error(`Gemini HTTP ${response.status}: ${text}`);
+  const responseText =
+    await response.text();
+
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      `Gemini HTTP ${response.status}: ${responseText}`
+    );
+
   }
 
-  return parseJsonArray(extractGeminiText(JSON.parse(text)));
+
+  const data =
+    JSON.parse(
+      responseText
+    );
+
+
+  const geminiText =
+    extractGeminiText(
+      data
+    );
+
+
+  return parseJsonArray(
+    geminiText
+  );
+
 }
 
-function buildDisclosureCards(samples) {
-  return samples.map((x, i) => `
+
+/* =========================================================
+   생보협회 공시 상품 4개 HTML
+
+   어린이보험
+   암보험
+   간병/치매보험
+   기타
+========================================================= */
+
+function buildDisclosureCards(
+  samples
+) {
+
+  return samples
+
+    .map(
+      (
+        item,
+        index
+      ) => `
+
 <tr>
-  <td style="padding:18px 28px;border-bottom:1px solid #eeeeee;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+
+  <td style="
+    padding:18px 28px;
+    border-bottom:1px solid #eeeeee;
+  ">
+
+    <table
+      width="100%"
+      cellpadding="0"
+      cellspacing="0"
+      border="0"
+      role="presentation"
+    >
+
       <tr>
-        <td style="width:42px;vertical-align:top;">
-          <div style="width:30px;height:30px;line-height:30px;text-align:center;border-radius:50%;background:#FFF0EA;color:#FF5E1F;font-size:12px;font-weight:800;">
-            ${String(i + 1).padStart(2, '0')}
+
+        <td style="
+          width:42px;
+          vertical-align:top;
+        ">
+
+          <div style="
+            width:30px;
+            height:30px;
+            line-height:30px;
+            text-align:center;
+            border-radius:50%;
+            background:#FFF0EA;
+            color:#FF5E1F;
+            font-size:12px;
+            font-weight:800;
+          ">
+            ${String(
+              index + 1
+            ).padStart(
+              2,
+              '0'
+            )}
           </div>
+
         </td>
-        <td style="vertical-align:top;">
-          <p style="margin:0 0 4px 0;font-size:11px;font-weight:700;color:#FF5E1F;">
-            ${escapeHtml(x.카테고리)}
+
+
+        <td style="
+          vertical-align:top;
+        ">
+
+          <p style="
+            margin:0 0 4px 0;
+            font-size:11px;
+            font-weight:700;
+            color:#FF5E1F;
+          ">
+            ${escapeHtml(
+              item.카테고리
+            )}
           </p>
-          <p style="margin:0 0 8px 0;font-size:15px;font-weight:700;color:#222222;line-height:1.5;">
-            ${escapeHtml(x.보험회사명)} · ${escapeHtml(x.상품명)}
+
+
+          <p style="
+            margin:0 0 8px 0;
+            font-size:15px;
+            font-weight:700;
+            color:#222222;
+            line-height:1.5;
+          ">
+
+            ${escapeHtml(
+              item.보험회사명
+            )}
+
+            ·
+
+            ${escapeHtml(
+              item.상품명
+            )}
+
           </p>
-          <p style="margin:3px 0;font-size:12px;color:#666666;line-height:1.7;"><strong>급부명칭</strong> ${escapeHtml(x.급부명칭 || '-')}</p>
-          <p style="margin:3px 0;font-size:12px;color:#666666;line-height:1.7;"><strong>지급사유</strong> ${escapeHtml(x.지급사유 || '-')}</p>
-          <p style="margin:3px 0;font-size:12px;color:#666666;line-height:1.7;"><strong>지급금액</strong> ${escapeHtml(x.지급금액 || '-')}</p>
+
+
+          <p style="
+            margin:3px 0;
+            font-size:12px;
+            color:#666666;
+            line-height:1.7;
+          ">
+
+            <strong>
+              급부명칭
+            </strong>
+
+            ${escapeHtml(
+              item.급부명칭 ||
+              '-'
+            )}
+
+          </p>
+
+
+          <p style="
+            margin:3px 0;
+            font-size:12px;
+            color:#666666;
+            line-height:1.7;
+          ">
+
+            <strong>
+              지급사유
+            </strong>
+
+            ${escapeHtml(
+              item.지급사유 ||
+              '-'
+            )}
+
+          </p>
+
+
+          <p style="
+            margin:3px 0;
+            font-size:12px;
+            color:#666666;
+            line-height:1.7;
+          ">
+
+            <strong>
+              지급금액
+            </strong>
+
+            ${escapeHtml(
+              item.지급금액 ||
+              '-'
+            )}
+
+          </p>
+
         </td>
+
       </tr>
+
     </table>
+
   </td>
-</tr>`).join('');
+
+</tr>
+
+`
+    )
+
+    .join(
+      ''
+    );
+
 }
 
-function buildNewsCards(articles, summaries) {
-  return articles.map((a, i) => {
-    const s = summaries.find(x => Number(x.index) === i + 1) || summaries[i] || {};
-    const d = Number(a.articleDate.slice(8, 10));
 
-    let bucket = '21일 ~ 말일';
-    if (d <= 10) bucket = '1일 ~ 10일';
-    else if (d <= 20) bucket = '11일 ~ 20일';
+/* =========================================================
+   보험신보 기사 4개 HTML
+========================================================= */
 
-    return `
+function buildNewsCards(
+  articles,
+  summaries
+) {
+
+  return articles
+
+    .map(
+      (
+        article,
+        index
+      ) => {
+
+        const summary =
+          summaries.find(
+            x =>
+              Number(
+                x.index
+              ) ===
+              index + 1
+          )
+
+          ||
+
+          summaries[
+            index
+          ]
+
+          ||
+
+          {};
+
+
+        const day =
+          Number(
+            article.articleDate.slice(
+              8,
+              10
+            )
+          );
+
+
+        let bucket =
+          '21일 ~ 말일';
+
+
+        if (
+          day <= 10
+        ) {
+
+          bucket =
+            '1일 ~ 10일';
+
+        } else if (
+          day <= 20
+        ) {
+
+          bucket =
+            '11일 ~ 20일';
+
+        }
+
+
+        return `
+
 <tr>
-  <td style="padding:20px 28px;border-bottom:1px solid #eeeeee;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+
+  <td style="
+    padding:20px 28px;
+    border-bottom:1px solid #eeeeee;
+  ">
+
+    <table
+      width="100%"
+      cellpadding="0"
+      cellspacing="0"
+      border="0"
+      role="presentation"
+    >
+
       <tr>
-        <td style="width:42px;vertical-align:top;">
-          <div style="width:30px;height:30px;line-height:30px;text-align:center;border-radius:50%;background:#FFF0EA;color:#FF5E1F;font-size:12px;font-weight:800;">
-            ${String(i + 1).padStart(2, '0')}
+
+        <td style="
+          width:42px;
+          vertical-align:top;
+        ">
+
+          <div style="
+            width:30px;
+            height:30px;
+            line-height:30px;
+            text-align:center;
+            border-radius:50%;
+            background:#FFF0EA;
+            color:#FF5E1F;
+            font-size:12px;
+            font-weight:800;
+          ">
+
+            ${String(
+              index + 1
+            ).padStart(
+              2,
+              '0'
+            )}
+
           </div>
+
         </td>
-        <td style="vertical-align:top;">
-          <p style="margin:0 0 4px 0;font-size:11px;font-weight:700;color:#FF5E1F;">${bucket}</p>
-          <p style="margin:0 0 7px 0;font-size:15px;font-weight:700;color:#222222;line-height:1.5;">
-            ${escapeHtml(s.company || '')}${s.company ? ' · ' : ''}${escapeHtml(s.product || a.title)}
+
+
+        <td style="
+          vertical-align:top;
+        ">
+
+          <p style="
+            margin:0 0 4px 0;
+            font-size:11px;
+            font-weight:700;
+            color:#FF5E1F;
+          ">
+
+            ${bucket}
+
           </p>
-          <p style="margin:0;font-size:13px;color:#666666;line-height:1.8;">
-            <strong>[특징]</strong> ${escapeHtml(s.feature || '')}
+
+
+          <p style="
+            margin:0 0 7px 0;
+            font-size:15px;
+            font-weight:700;
+            color:#222222;
+            line-height:1.5;
+          ">
+
+            ${escapeHtml(
+              summary.company ||
+              ''
+            )}
+
+            ${
+              summary.company
+                ? ' · '
+                : ''
+            }
+
+            ${escapeHtml(
+              summary.product ||
+              article.title
+            )}
+
           </p>
-          <p style="margin:6px 0 0 0;font-size:13px;color:#666666;line-height:1.8;">
-            <strong>[우체국보험 시사점]</strong> ${escapeHtml(s.implication || '')}
+
+
+          <p style="
+            margin:0;
+            font-size:13px;
+            color:#666666;
+            line-height:1.8;
+          ">
+
+            <strong>
+              [특징]
+            </strong>
+
+            ${escapeHtml(
+              summary.feature ||
+              ''
+            )}
+
           </p>
-          <p style="margin:8px 0 0 0;font-size:11px;color:#aaaaaa;">
-            보험신보 | ${escapeHtml(a.articleDate)}
-            · <a href="${escapeHtml(a.url)}" target="_blank" style="color:#999999;text-decoration:underline;">원문보기</a>
+
+
+          <p style="
+            margin:6px 0 0 0;
+            font-size:13px;
+            color:#666666;
+            line-height:1.8;
+          ">
+
+            <strong>
+              [우체국보험 시사점]
+            </strong>
+
+            ${escapeHtml(
+              summary.implication ||
+              ''
+            )}
+
           </p>
+
+
+          <p style="
+            margin:8px 0 0 0;
+            font-size:11px;
+            color:#aaaaaa;
+          ">
+
+            보험신보 |
+
+            ${escapeHtml(
+              article.articleDate
+            )}
+
+            ·
+
+            <a
+              href="${escapeHtml(
+                article.url
+              )}"
+              target="_blank"
+              style="
+                color:#999999;
+                text-decoration:underline;
+              "
+            >
+              원문보기
+            </a>
+
+          </p>
+
         </td>
+
       </tr>
+
     </table>
+
   </td>
-</tr>`;
-  }).join('');
+
+</tr>
+
+`;
+
+      }
+    )
+
+    .join(
+      ''
+    );
+
 }
 
-function buildHtml(meta, articles, summaries) {
-  const [year, month] = TARGET_MONTH.split('-');
-  const monthNumber = Number(month);
+
+/* =========================================================
+   뉴스레터 HTML 전체
+========================================================= */
+
+function buildHtml(
+  meta,
+  articles,
+  summaries
+) {
+
+  const [
+    year,
+    month
+  ] =
+    TARGET_MONTH.split(
+      '-'
+    );
+
+
+  const monthNumber =
+    Number(
+      month
+    );
+
+
+  const disclosureCards =
+    buildDisclosureCards(
+      meta.newsletterSamples ||
+      []
+    );
+
+
+  const newsCards =
+    buildNewsCards(
+      articles,
+      summaries
+    );
+
 
   return `<!DOCTYPE html>
+
 <html lang="ko">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
-    body,table,td,p,div,span,a,h1,h2,h3 {
-      font-family:Pretendard,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",Arial,sans-serif !important;
-    }
-  </style>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
+<style>
+
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+
+body,
+table,
+td,
+p,
+div,
+span,
+a,
+h1,
+h2,
+h3 {
+
+  font-family:
+    Pretendard,
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    "맑은 고딕",
+    Arial,
+    sans-serif !important;
+
+}
+
+</style>
+
 </head>
-<body style="margin:0;padding:0;background:#f5f5f5;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="background:#f5f5f5;">
-<tr>
-<td align="center" style="padding:24px 12px;">
-<table width="640" cellpadding="0" cellspacing="0" border="0" role="presentation" style="width:100%;max-width:640px;background:#ffffff;border:1px solid #eeeeee;border-collapse:collapse;">
+
+
+<body style="
+  margin:0;
+  padding:0;
+  background:#f5f5f5;
+">
+
+
+<table
+  width="100%"
+  cellpadding="0"
+  cellspacing="0"
+  border="0"
+  role="presentation"
+  style="
+    background:#f5f5f5;
+  "
+>
 
 <tr>
-<td style="background:#FF5E1F;color:#ffffff;padding:30px 28px 25px 28px;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+
+<td
+  align="center"
+  style="
+    padding:24px 12px;
+  "
+>
+
+
+<table
+  width="640"
+  cellpadding="0"
+  cellspacing="0"
+  border="0"
+  role="presentation"
+  style="
+    width:100%;
+    max-width:640px;
+    background:#ffffff;
+    border:1px solid #eeeeee;
+    border-collapse:collapse;
+  "
+>
+
+
+<!-- HEADER -->
+
 <tr>
-<td style="font-size:12px;font-weight:700;letter-spacing:2px;color:#FFE6DA;">PRODUCT TREND BRIEF</td>
-<td style="font-size:12px;color:#FFE6DA;text-align:right;">${year}. ${month}</td>
+
+<td style="
+  background:#FF5E1F;
+  color:#ffffff;
+  padding:30px 28px 25px 28px;
+">
+
+<table
+  width="100%"
+  cellpadding="0"
+  cellspacing="0"
+  border="0"
+  role="presentation"
+>
+
+<tr>
+
+<td style="
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:2px;
+  color:#FFE6DA;
+">
+
+PRODUCT TREND BRIEF
+
+</td>
+
+
+<td style="
+  font-size:12px;
+  color:#FFE6DA;
+  text-align:right;
+">
+
+${year}. ${month}
+
+</td>
+
 </tr>
+
 </table>
-<h1 style="margin:17px 0 0 0;font-size:25px;font-weight:800;line-height:1.4;color:#ffffff;">
+
+
+<h1 style="
+  margin:17px 0 0 0;
+  font-size:25px;
+  font-weight:800;
+  line-height:1.4;
+  color:#ffffff;
+">
+
 ${monthNumber}월 민영사 신상품 동향
+
 </h1>
-<p style="margin:7px 0 0 0;font-size:13px;line-height:1.7;color:#FFE6DA;">
+
+
+<p style="
+  margin:7px 0 0 0;
+  font-size:13px;
+  line-height:1.7;
+  color:#FFE6DA;
+">
+
 이달의 민영 생명보험사 신상품
+
 </p>
+
 </td>
+
 </tr>
 
+
+<!-- MONTH SUMMARY -->
+
 <tr>
-<td style="padding:22px 28px;border-bottom:1px solid #eeeeee;">
-<p style="margin:0;font-size:14px;color:#444444;line-height:1.85;">
+
+<td style="
+  padding:22px 28px;
+  border-bottom:1px solid #eeeeee;
+">
+
+<p style="
+  margin:0;
+  font-size:14px;
+  color:#444444;
+  line-height:1.85;
+">
+
 ${monthNumber}월 생명보험협회 판매일자 기준
-<strong>상품 ${meta.productCount}건</strong>,
-<strong>급부 항목 ${meta.benefitCount}건</strong>이 확인되었습니다.
-동일 상품이 보험기간·급부 등에 따라 여러 행으로 구성된 경우 상품 수는 1건으로 계산했습니다.
+<strong>
+상품 ${meta.productCount}건
+</strong>,
+<strong>
+급부 항목 ${meta.benefitCount}건
+</strong>
+이 확인되었습니다.
+
+동일 상품이 보험기간·급부 등에 따라
+여러 행으로 구성된 경우
+상품 수는 1건으로 계산했습니다.
+
 </p>
+
 </td>
+
 </tr>
 
-<tr>
-<td style="padding:25px 28px 10px 28px;">
-<span style="display:inline-block;font-size:11px;font-weight:700;color:#ffffff;background:#FF5E1F;padding:4px 10px;border-radius:3px;letter-spacing:1px;">KLIA DISCLOSURE</span>
-<h2 style="font-size:18px;font-weight:800;color:#222222;margin:11px 0 4px 0;">공시에서 살펴본 상품 4선</h2>
-<p style="font-size:12px;color:#999999;margin:0;">어린이보험 · 암보험 · 간병/치매보험 · 기타에서 각 1개 상품을 선정했습니다.</p>
-</td>
-</tr>
 
-${buildDisclosureCards(meta.newsletterSamples || [])}
+<!-- KLIA PRODUCTS TITLE -->
 
 <tr>
-<td style="padding:25px 28px 10px 28px;">
-<span style="display:inline-block;font-size:11px;font-weight:700;color:#ffffff;background:#FF5E1F;padding:4px 10px;border-radius:3px;letter-spacing:1px;">NEWS PICK</span>
-<h2 style="font-size:18px;font-weight:800;color:#222222;margin:11px 0 4px 0;">보험신보 신상품 4선</h2>
-<p style="font-size:12px;color:#999999;margin:0;">기사 작성일 기준 1~10일 1건, 11~20일 2건, 21일~말일 1건을 선정했습니다.</p>
-</td>
-</tr>
 
-${buildNewsCards(articles, summaries)}
+<td style="
+  padding:25px 28px 10px 28px;
+">
 
-<tr>
-<td style="padding:22px 28px;background:#FFF7F3;border-top:1px solid #FFD8C8;">
-<p style="font-size:13px;font-weight:700;color:#E84E12;margin:0 0 7px 0;">더 자세히 보고 싶다면?</p>
-<p style="font-size:12px;color:#666666;line-height:1.8;margin:0;">
-자세한 상품 내용은 <strong>첨부파일(V5 민영 생명보험 상품 통합본)</strong>과
-<strong>보험신보 원문</strong>을 참고해주시기 바랍니다.
+<span style="
+  display:inline-block;
+  font-size:11px;
+  font-weight:700;
+  color:#ffffff;
+  background:#FF5E1F;
+  padding:4px 10px;
+  border-radius:3px;
+  letter-spacing:1px;
+">
+
+KLIA DISCLOSURE
+
+</span>
+
+
+<h2 style="
+  font-size:18px;
+  font-weight:800;
+  color:#222222;
+  margin:11px 0 4px 0;
+">
+
+공시에서 살펴본 상품 4선
+
+</h2>
+
+
+<p style="
+  font-size:12px;
+  color:#999999;
+  margin:0;
+">
+
+어린이보험 · 암보험 · 간병/치매보험 · 기타에서
+각 1개 상품을 선정했습니다.
+
 </p>
+
 </td>
+
 </tr>
 
+
+${disclosureCards}
+
+
+<!-- NEWS TITLE -->
+
 <tr>
-<td style="padding:18px 28px;background:#2B2B2B;color:#999999;text-align:center;font-size:11px;line-height:1.7;">
-민영보험사 상품동향 조사·분석<br>
+
+<td style="
+  padding:25px 28px 10px 28px;
+">
+
+<span style="
+  display:inline-block;
+  font-size:11px;
+  font-weight:700;
+  color:#ffffff;
+  background:#FF5E1F;
+  padding:4px 10px;
+  border-radius:3px;
+  letter-spacing:1px;
+">
+
+NEWS PICK
+
+</span>
+
+
+<h2 style="
+  font-size:18px;
+  font-weight:800;
+  color:#222222;
+  margin:11px 0 4px 0;
+">
+
+보험신보 신상품 4선
+
+</h2>
+
+
+<p style="
+  font-size:12px;
+  color:#999999;
+  margin:0;
+">
+
+기사 작성일 기준
+1~10일 1건,
+11~20일 2건,
+21일~말일 1건을 선정했습니다.
+
+</p>
+
+</td>
+
+</tr>
+
+
+${newsCards}
+
+
+<!-- GUIDE -->
+
+<tr>
+
+<td style="
+  padding:22px 28px;
+  background:#FFF7F3;
+  border-top:1px solid #FFD8C8;
+">
+
+<p style="
+  font-size:13px;
+  font-weight:700;
+  color:#E84E12;
+  margin:0 0 7px 0;
+">
+
+더 자세히 보고 싶다면?
+
+</p>
+
+
+<p style="
+  font-size:12px;
+  color:#666666;
+  line-height:1.8;
+  margin:0;
+">
+
+자세한 상품 내용은
+<strong>
+첨부파일(민영 생명보험 상품 통합본)
+</strong>
+과
+<strong>
+보험신보 원문
+</strong>
+을 참고해주시기 바랍니다.
+
+</p>
+
+</td>
+
+</tr>
+
+
+<!-- FOOTER -->
+
+<tr>
+
+<td style="
+  padding:18px 28px;
+  background:#2B2B2B;
+  color:#999999;
+  text-align:center;
+  font-size:11px;
+  line-height:1.7;
+">
+
+민영보험사 상품동향 조사·분석
+
+<br>
+
 우체국보험 상품개발 참고자료
+
 </td>
+
+</tr>
+
+
+</table>
+
+
+</td>
+
 </tr>
 
 </table>
-</td>
-</tr>
-</table>
+
+
 </body>
+
 </html>`;
+
 }
 
-async function sendMail(html) {
-  if (!SEND_MAIL) {
-    console.log('메일 발송 건너뜀: SEND_MAIL=false');
+
+/* =========================================================
+   Apps Script 메일 발송
+========================================================= */
+
+async function sendMail(
+  html
+) {
+
+  if (
+    !SEND_MAIL
+  ) {
+
+    console.log(
+      '메일 발송 건너뜀: SEND_MAIL=false'
+    );
+
     return;
+
   }
 
-  if (!V5_MAIL_URL || !V5_MAIL_SECRET) {
-    throw new Error('SEND_MAIL=true인데 V5_MAIL_URL/V5_MAIL_SECRET이 없습니다.');
+
+  if (
+    !V5_MAIL_URL ||
+    !V5_MAIL_SECRET
+  ) {
+
+    throw new Error(
+      'SEND_MAIL=true인데 V5_MAIL_URL/V5_MAIL_SECRET이 없습니다.'
+    );
+
   }
 
-  const monthNumber = Number(TARGET_MONTH.slice(5, 7));
 
-  const response = await fetch(V5_MAIL_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      secret: V5_MAIL_SECRET,
-      action: 'sendNewsletterV5',
-      targetMonth: TARGET_MONTH,
-      subject: `${monthNumber}월 민영사 신상품 동향`,
-      htmlBody: html,
-      attachmentFileName: path.basename(EXCEL_FILE)
-    })
-  });
+  const monthNumber =
+    Number(
+      TARGET_MONTH.slice(
+        5,
+        7
+      )
+    );
 
-  const text = await response.text();
-  const data = JSON.parse(text);
 
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || `V5 메일 발송 실패 HTTP ${response.status}`);
+  const response =
+    await fetch(
+      V5_MAIL_URL,
+      {
+
+        method:
+          'POST',
+
+        headers: {
+
+          'Content-Type':
+            'application/json'
+
+        },
+
+        body:
+          JSON.stringify({
+
+            secret:
+              V5_MAIL_SECRET,
+
+            action:
+              'sendNewsletterV5',
+
+            targetMonth:
+              TARGET_MONTH,
+
+            subject:
+              `${monthNumber}월 민영사 신상품 동향`,
+
+            htmlBody:
+              html,
+
+            attachmentFileName:
+              path.basename(
+                EXCEL_FILE
+              )
+
+          })
+
+      }
+    );
+
+
+  const responseText =
+    await response.text();
+
+
+  let data;
+
+
+  try {
+
+    data =
+      JSON.parse(
+        responseText
+      );
+
+  } catch {
+
+    throw new Error(
+      'V5 Apps Script 응답이 JSON이 아닙니다: ' +
+      responseText.slice(
+        0,
+        500
+      )
+    );
+
   }
 
-  console.log('V5 뉴스레터 메일 발송 완료');
+
+  if (
+    !response.ok ||
+    !data.ok
+  ) {
+
+    throw new Error(
+      data.error ||
+      `V5 메일 발송 실패 HTTP ${response.status}`
+    );
+
+  }
+
+
+  console.log(
+    'V5 뉴스레터 메일 발송 완료'
+  );
+
 }
+
+
+/* =========================================================
+   MAIN
+========================================================= */
 
 async function main() {
-  if (!fs.existsSync(META_FILE)) {
-    throw new Error(`메타파일 없음: ${META_FILE}`);
+
+  if (
+    !fs.existsSync(
+      META_FILE
+    )
+  ) {
+
+    throw new Error(
+      `메타파일 없음: ${META_FILE}`
+    );
+
   }
 
-  const meta = JSON.parse(fs.readFileSync(META_FILE, 'utf8'));
 
-  const browser = await chromium.launch({ headless: true });
+  const meta =
+    JSON.parse(
+      fs.readFileSync(
+        META_FILE,
+        'utf8'
+      )
+    );
+
+
+  console.log(
+    `V5 뉴스레터 대상월: ${TARGET_MONTH}`
+  );
+
+
+  console.log(
+    `생보협회 상품 수: ${meta.productCount}`
+  );
+
+
+  console.log(
+    `생보협회 급부 항목 수: ${meta.benefitCount}`
+  );
+
+
+  const browser =
+    await chromium.launch({
+
+      headless:
+        true
+
+    });
+
 
   let selected = [];
 
+
   try {
-const list =
-  await collectInsweekList(
-    browser
-  );
+
+    /*
+      1.
+      보험신보 대상월 기사 목록 수집
+    */
+
+    const list =
+      await collectInsweekList(
+        browser
+      );
 
 
-console.log(
-  `보험신보 대상월 생보 신상품 후보: ${list.length}건`
-);
+    if (
+      list.length === 0
+    ) {
+
+      throw new Error(
+        `보험신보 ${TARGET_MONTH} 대상월 기사를 찾지 못했습니다.`
+      );
+
+    }
 
 
-if (
-  list.length === 0
-) {
+    /*
+      2.
+      대상월 기사 본문까지 수집
+    */
 
-  throw new Error(
-    `보험신보 ${TARGET_MONTH} 생보 신상품 후보가 0건입니다. 빈 뉴스레터 생성을 중단합니다.`
-  );
-
-}
-
-
-selected =
-  selectFourArticles(
-    list
-  );
+    console.log(
+      `보험신보 대상월 기사 본문 수집 시작: ${list.length}건`
+    );
 
 
-console.log(
-  `보험신보 선정: ${selected.length}건`
-);
-    console.log(`보험신보 선정: ${selected.length}건`);
+    const enriched =
+      await enrichArticles(
+        browser,
+        list
+      );
 
-    selected = await enrichArticles(browser, selected);
+
+    /*
+      3.
+      생명보험 기사만 필터
+    */
+
+    const lifeArticles =
+      filterLifeInsuranceArticles(
+        enriched
+      );
+
+
+    if (
+      lifeArticles.length === 0
+    ) {
+
+      throw new Error(
+        `보험신보 ${TARGET_MONTH} 생명보험 신상품 후보가 0건입니다.`
+      );
+
+    }
+
+
+    /*
+      4.
+      4개 기사 선정
+    */
+
+    selected =
+      selectFourArticles(
+        lifeArticles
+      );
+
+
+    console.log(
+      `보험신보 최종 선정: ${selected.length}건`
+    );
+
+
+    for (
+      const article
+      of selected
+    ) {
+
+      console.log(
+        `선정 | ${article.articleDate} | ${article.title}`
+      );
+
+    }
+
+
+    if (
+      selected.length === 0
+    ) {
+
+      throw new Error(
+        '보험신보 최종 선정 기사가 없습니다.'
+      );
+
+    }
 
   } finally {
+
     await browser.close();
+
   }
 
-  let summaries;
+
+  /* =======================================================
+     Gemini 요약
+  ======================================================= */
+
+  let summaries = [];
+
 
   try {
-    summaries = await summarizeWithGemini(selected);
-    console.log('Gemini 기사 요약 완료');
-  } catch (e) {
-    console.log(`Gemini 요약 실패: ${e.message}`);
 
-    summaries = selected.map((a, i) => ({
-      index: i + 1,
-      company: '',
-      product: a.title,
-      feature: '자동 요약에 실패했습니다. 보험신보 원문을 참고해주세요.',
-      implication: '원문 확인 후 상품개발 관점에서 검토가 필요합니다.'
-    }));
+    summaries =
+      await summarizeWithGemini(
+        selected
+      );
+
+
+    console.log(
+      `Gemini 기사 요약 완료: ${summaries.length}건`
+    );
+
+  } catch (e) {
+
+    /*
+      Gemini가 실패해도
+      HTML 자체는 생성하도록 fallback
+    */
+
+    console.log(
+      `Gemini 요약 실패: ${e.message}`
+    );
+
+
+    summaries =
+      selected.map(
+        (
+          article,
+          index
+        ) => ({
+
+          index:
+            index + 1,
+
+          company:
+            '',
+
+          product:
+            article.title,
+
+          feature:
+            'AI 자동 요약에 실패했습니다. 보험신보 원문을 참고해주세요.',
+
+          implication:
+            '기사 원문 확인 후 상품개발 관점에서 추가 검토가 필요합니다.'
+
+        })
+      );
+
   }
 
-  const html = buildHtml(meta, selected, summaries);
 
-  fs.writeFileSync(HTML_FILE, html, 'utf8');
-  fs.writeFileSync(
-    JSON_FILE,
-    JSON.stringify({
-      targetMonth: TARGET_MONTH,
-      disclosureSamples: meta.newsletterSamples || [],
-      insweekArticles: selected,
+  /* =======================================================
+     HTML 생성
+  ======================================================= */
+
+  const html =
+    buildHtml(
+      meta,
+      selected,
       summaries
-    }, null, 2),
+    );
+
+
+  fs.writeFileSync(
+    HTML_FILE,
+    html,
     'utf8'
   );
 
-  console.log(`V5 뉴스레터 HTML 생성: ${HTML_FILE}`);
 
-  await sendMail(html);
+  console.log(
+    `V5 뉴스레터 HTML 생성: ${HTML_FILE}`
+  );
+
+
+  /* =======================================================
+     뉴스레터 데이터 JSON 저장
+  ======================================================= */
+
+  fs.writeFileSync(
+
+    JSON_FILE,
+
+    JSON.stringify(
+      {
+
+        targetMonth:
+          TARGET_MONTH,
+
+        productCount:
+          meta.productCount,
+
+        benefitCount:
+          meta.benefitCount,
+
+        disclosureSamples:
+          meta.newsletterSamples ||
+          [],
+
+        insweekArticles:
+          selected,
+
+        summaries
+
+      },
+      null,
+      2
+    ),
+
+    'utf8'
+
+  );
+
+
+  console.log(
+    `V5 뉴스레터 JSON 생성: ${JSON_FILE}`
+  );
+
+
+  /* =======================================================
+     메일 발송
+  ======================================================= */
+
+  await sendMail(
+    html
+  );
+
+
+  console.log(
+    ''
+  );
+
+
+  console.log(
+    '=============================='
+  );
+
+
+  console.log(
+    'V5 뉴스레터 처리 완료'
+  );
+
+
+  console.log(
+    '=============================='
+  );
+
 }
 
-main().catch(err => {
-  console.error('newsletter_v5.js 실행 실패');
-  console.error(err);
-  process.exit(1);
-});
+
+/* =========================================================
+   실행
+========================================================= */
+
+main().catch(
+  err => {
+
+    console.error(
+      'newsletter_v5.js 실행 실패'
+    );
+
+
+    console.error(
+      err
+    );
+
+
+    process.exit(
+      1
+    );
+
+  }
+);
