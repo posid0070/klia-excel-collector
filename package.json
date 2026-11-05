@@ -7,7 +7,7 @@
     "start": "node scraper.js"
   },
   "dependencies": {
-    "playwright": "^1.51.1",
+    "playwright": "1.64.1",
     "xlsx": "^0.18.5"
   }
 }
