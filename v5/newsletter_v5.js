@@ -94,43 +94,381 @@ function insweekPageUrl(pageNo) {
 }
 
 async function collectInsweekList(browser) {
-  const page = await browser.newPage();
-  const start = `${TARGET_MONTH}-01`;
-  const end = `${TARGET_MONTH}-31`;
-  const map = new Map();
+
+  const page =
+    await browser.newPage();
+
+  const start =
+    `${TARGET_MONTH}-01`;
+
+  const end =
+    `${TARGET_MONTH}-31`;
+
+  const map =
+    new Map();
+
 
   try {
-    for (let pageNo = 1; pageNo <= 3; pageNo++) {
-      console.log(`보험신보 ${pageNo}페이지 확인`);
 
-      await page.goto(insweekPageUrl(pageNo), {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000
-      });
+    for (
+      let pageNo = 1;
+      pageNo <= 3;
+      pageNo++
+    ) {
 
-      await page.waitForTimeout(700);
+      console.log(
+        `보험신보 ${pageNo}페이지 확인`
+      );
 
-      const raw = await page
-        .locator('a[href*="articleView.html"]')
-        .evaluateAll(nodes => {
-          const out = [];
 
-          for (const a of nodes) {
-            let parent = a;
-            let dateText = '';
+      await page.goto(
+        insweekPageUrl(pageNo),
+        {
+          waitUntil:
+            'domcontentloaded',
 
-            for (let i = 0; i < 10; i++) {
-              if (!parent) break;
+          timeout:
+            30000
+        }
+      );
 
-              const els = parent.querySelectorAll('.altlist-info-item');
 
-              for (const el of els) {
-                const t = (el.textContent || '').trim();
-                if (/\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/.test(t)) {
-                  dateText = t;
-                  break;
-                }
+      await page.waitForTimeout(
+        1000
+      );
+
+
+      /*
+        핵심 수정
+
+        기존:
+        기사 제목 a태그에서 위로 올라가며
+        날짜를 찾음
+
+        수정:
+        확실하게 존재하는
+        .altlist-info-item 날짜를 먼저 찾고
+
+        그 날짜와 같은 기사 영역 안에서
+        articleView 링크를 찾음
+      */
+
+      const raw =
+        await page.evaluate(() => {
+
+          const results = [];
+
+          const dateNodes =
+            Array.from(
+              document.querySelectorAll(
+                '.altlist-info-item'
+              )
+            );
+
+
+          for (
+            const dateEl
+            of dateNodes
+          ) {
+
+            const dateText =
+              (
+                dateEl.textContent ||
+                ''
+              ).trim();
+
+
+            /*
+              10-28 09:00
+              같은 작성일만 사용
+            */
+
+            if (
+              !/\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/
+                .test(dateText)
+            ) {
+
+              continue;
+
+            }
+
+
+            let container =
+              dateEl;
+
+
+            let articleLink =
+              null;
+
+
+            /*
+              날짜가 들어있는 영역에서
+              기사 제목 링크를 찾음
+            */
+
+            for (
+              let depth = 0;
+              depth < 8;
+              depth++
+            ) {
+
+              if (!container) {
+                break;
               }
+
+
+              const links =
+                Array.from(
+                  container.querySelectorAll(
+                    'a[href*="articleView.html"]'
+                  )
+                )
+
+                .map(a => ({
+                  element: a,
+
+                  text:
+                    (
+                      a.innerText ||
+                      a.textContent ||
+                      ''
+                    ).trim(),
+
+                  href:
+                    a.href || ''
+                }))
+
+                .filter(
+                  x =>
+                    x.href &&
+                    x.text &&
+                    x.text.length >= 4
+                );
+
+
+              if (
+                links.length
+              ) {
+
+                /*
+                  같은 영역에 링크가 여러 개면
+                  가장 제목다운 긴 텍스트 선택
+                */
+
+                links.sort(
+                  (a, b) =>
+                    b.text.length -
+                    a.text.length
+                );
+
+
+                articleLink =
+                  links[0];
+
+                break;
+
+              }
+
+
+              container =
+                container.parentElement;
+
+            }
+
+
+            if (
+              !articleLink
+            ) {
+
+              continue;
+
+            }
+
+
+            results.push({
+
+              title:
+                articleLink.text,
+
+              url:
+                articleLink.href,
+
+              dateText:
+                dateText
+
+            });
+
+          }
+
+
+          return results;
+
+        });
+
+
+      console.log(
+        `보험신보 ${pageNo}페이지 날짜+기사 추출: ${raw.length}건`
+      );
+
+
+      /*
+        디버깅용으로 앞 5건 출력
+      */
+
+      for (
+        const item
+        of raw.slice(0, 5)
+      ) {
+
+        console.log(
+          `  ${item.dateText} | ${item.title}`
+        );
+
+      }
+
+
+      for (
+        const item
+        of raw
+      ) {
+
+        if (
+          !item.url ||
+          !item.title ||
+          !item.dateText
+        ) {
+
+          continue;
+
+        }
+
+
+        const articleDate =
+          parseInsweekDate(
+            item.dateText
+          );
+
+
+        if (
+          !articleDate ||
+          articleDate < start ||
+          articleDate > end
+        ) {
+
+          continue;
+
+        }
+
+
+        const title =
+          clean(
+            item.title
+          );
+
+
+        /*
+          손보 / 변액 / 실손 등 제외
+        */
+
+        if (
+          EXCLUDE_KEYWORDS.some(
+            k =>
+              title.includes(k)
+          )
+        ) {
+
+          continue;
+
+        }
+
+
+        /*
+          생명보험사 기사만
+        */
+
+        if (
+          !LIFE_COMPANY_KEYWORDS.some(
+            k =>
+              title.includes(k)
+          )
+        ) {
+
+          continue;
+
+        }
+
+
+        const url =
+          item.url.split('#')[0];
+
+
+        /*
+          동일 URL 중복 제거
+        */
+
+        if (
+          !map.has(url) ||
+          title.length >
+            map.get(url).title.length
+        ) {
+
+          map.set(
+            url,
+            {
+
+              title,
+
+              url,
+
+              articleDate
+
+            }
+          );
+
+        }
+
+      }
+
+    }
+
+  } finally {
+
+    await page.close();
+
+  }
+
+
+  const results =
+    [...map.values()]
+      .sort(
+        (a, b) =>
+          a.articleDate
+            .localeCompare(
+              b.articleDate
+            )
+      );
+
+
+  console.log(
+    `보험신보 ${TARGET_MONTH} 생보 신상품 최종 후보: ${results.length}건`
+  );
+
+
+  for (
+    const item
+    of results
+  ) {
+
+    console.log(
+      `${item.articleDate} | ${item.title}`
+    );
+
+  }
+
+
+  return results;
+
+}
 
               if (dateText) break;
               parent = parent.parentElement;
@@ -555,10 +893,37 @@ async function main() {
   let selected = [];
 
   try {
-    const list = await collectInsweekList(browser);
-    console.log(`보험신보 대상월 생보 신상품 후보: ${list.length}건`);
+const list =
+  await collectInsweekList(
+    browser
+  );
 
-    selected = selectFourArticles(list);
+
+console.log(
+  `보험신보 대상월 생보 신상품 후보: ${list.length}건`
+);
+
+
+if (
+  list.length === 0
+) {
+
+  throw new Error(
+    `보험신보 ${TARGET_MONTH} 생보 신상품 후보가 0건입니다. 빈 뉴스레터 생성을 중단합니다.`
+  );
+
+}
+
+
+selected =
+  selectFourArticles(
+    list
+  );
+
+
+console.log(
+  `보험신보 선정: ${selected.length}건`
+);
     console.log(`보험신보 선정: ${selected.length}건`);
 
     selected = await enrichArticles(browser, selected);
