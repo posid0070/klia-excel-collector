@@ -419,10 +419,6 @@ async function clickInsweekPageNumber(
   pageNo
 ) {
 
-  const selector =
-    'ul.pagination[aria-label="Pagination"] ' +
-    'a.pagination-link';
-
   await page
     .locator('ul.pagination[aria-label="Pagination"]')
     .first()
@@ -432,17 +428,26 @@ async function clickInsweekPageNumber(
     })
     .catch(() => {});
 
-  const candidates = page
-    .locator(selector)
-    .filter({
-      hasText: new RegExp(`^\\s*${pageNo}\\s*$`)
-    });
+  /*
+    페이지 숫자 텍스트가 아니라 실제 href의 page 파라미터를 기준으로 찾는다.
 
-  const count = await candidates.count();
+    예)
+    <a href="...articleList.html?page=2&total=2120&sc_sub_section_code=S2N19&view_type=sm"
+       class="pagination-link">2</a>
+  */
+  const links = page.locator(
+    'ul.pagination[aria-label="Pagination"] ' +
+    'a.pagination-link[href*="page="]'
+  );
+
+  const count = await links.count();
 
   console.log(
-    `페이지번호 ${pageNo} 링크 후보: ${count}개`
+    `pagination page=${pageNo} 링크 탐색: 전체 ${count}개`
   );
+
+  let targetLink = null;
+  let targetHref = '';
 
   for (
     let i = 0;
@@ -450,146 +455,172 @@ async function clickInsweekPageNumber(
     i++
   ) {
 
-    const link = candidates.nth(i);
-
-    const visible = await link
-      .isVisible()
-      .catch(() => false);
-
-    if (!visible) continue;
+    const link = links.nth(i);
 
     const rawHref = await link
       .getAttribute('href')
       .catch(() => '');
 
-    const onclick = await link
-      .getAttribute('onclick')
-      .catch(() => '');
+    if (!rawHref) continue;
 
-    console.log(
-      `페이지 ${pageNo} 링크 발견 | href=${rawHref || ''} | onclick=${onclick || ''}`
-    );
-
-    let absoluteHref = '';
-
-    if (rawHref) {
-      try {
-        absoluteHref = new URL(
-          String(rawHref)
-            .replace(/&amp;/g, '&')
-            .replace(/&#38;/g, '&'),
-          page.url()
-        ).href;
-      } catch (_) {}
-    }
-
-    /* 1순위: 실제 페이지 숫자 링크 클릭 */
     try {
 
-      await Promise.all([
-        page
-          .waitForNavigation({
-            waitUntil: 'domcontentloaded',
-            timeout: 15000
-          })
-          .catch(() => null),
-        link.click({
-          force: true,
-          timeout: 10000
-        })
-      ]);
+      const absoluteHref = new URL(
+        String(rawHref)
+          .replace(/&amp;/g, '&')
+          .replace(/&#38;/g, '&'),
+        page.url()
+      ).href;
 
-      await page.waitForTimeout(800);
+      const url = new URL(absoluteHref);
 
-      const current =
-        await getInsweekCurrentPageNo(page);
-
-      const urlPageNo = (() => {
-        try {
-          return Number(
-            new URL(page.url())
-              .searchParams
-              .get('page')
-          );
-        } catch (_) {
-          return 0;
-        }
-      })();
-
-      console.log(
-        `페이지 ${pageNo} 클릭 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
+      const hrefPageNo = Number(
+        url.searchParams.get('page')
       );
+
+      const category =
+        url.searchParams.get(
+          'sc_sub_section_code'
+        );
+
+      const viewType =
+        url.searchParams.get(
+          'view_type'
+        );
 
       if (
-        current === pageNo ||
-        urlPageNo === pageNo
+        hrefPageNo === pageNo &&
+        category === 'S2N19' &&
+        viewType === 'sm'
       ) {
-        return true;
+
+        targetLink = link;
+        targetHref = absoluteHref;
+        break;
       }
 
-    } catch (e) {
-      console.log(
-        `페이지 ${pageNo} 링크 클릭 실패: ${e.message}`
-      );
-    }
-
-    /* 2순위: 같은 링크의 실제 href를 그대로 이동 */
-    if (absoluteHref) {
-
-      try {
-
-        console.log(
-          `페이지 ${pageNo} 실제 href 직접 이동: ${absoluteHref}`
-        );
-
-        await page.goto(
-          absoluteHref,
-          {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000,
-            referer: insweekBaseUrl()
-          }
-        );
-
-        await page.waitForTimeout(800);
-
-        const current =
-          await getInsweekCurrentPageNo(page);
-
-        const urlPageNo = (() => {
-          try {
-            return Number(
-              new URL(page.url())
-                .searchParams
-                .get('page')
-            );
-          } catch (_) {
-            return 0;
-          }
-        })();
-
-        console.log(
-          `페이지 ${pageNo} href 이동 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
-        );
-
-        if (
-          current === pageNo ||
-          urlPageNo === pageNo
-        ) {
-          return true;
-        }
-
-      } catch (e) {
-        console.log(
-          `페이지 ${pageNo} 실제 href 이동 실패: ${e.message}`
-        );
-      }
-    }
+    } catch (_) {}
   }
 
-  return false;
-}
+  if (!targetLink || !targetHref) {
 
+    console.log(
+      `pagination에서 page=${pageNo} 정확한 href를 찾지 못했습니다.`
+    );
+
+    return false;
+  }
+
+  console.log(
+    `페이지 ${pageNo} 정확한 링크 발견: ${targetHref}`
+  );
+
+  /* 1순위: 보험신보가 제공한 실제 링크를 클릭 */
+  try {
+
+    await Promise.all([
+      page
+        .waitForNavigation({
+          waitUntil: 'domcontentloaded',
+          timeout: 15000
+        })
+        .catch(() => null),
+      targetLink.click({
+        force: true,
+        timeout: 10000
+      })
+    ]);
+
+    await page.waitForTimeout(800);
+
+    const current =
+      await getInsweekCurrentPageNo(page);
+
+    const urlPageNo = (() => {
+      try {
+        return Number(
+          new URL(page.url())
+            .searchParams
+            .get('page')
+        );
+      } catch (_) {
+        return 0;
+      }
+    })();
+
+    console.log(
+      `페이지 ${pageNo} 클릭 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
+    );
+
+    if (
+      current === pageNo ||
+      urlPageNo === pageNo
+    ) {
+      return true;
+    }
+
+  } catch (e) {
+
+    console.log(
+      `페이지 ${pageNo} 실제 링크 클릭 실패: ${e.message}`
+    );
+  }
+
+  /*
+    2순위:
+    클릭이 막혀도 페이지에서 읽은 실제 href를 그대로 사용한다.
+    total 값도 사이트가 준 값을 그대로 유지한다.
+  */
+  try {
+
+    console.log(
+      `페이지 ${pageNo} 실제 href 직접 이동: ${targetHref}`
+    );
+
+    await page.goto(
+      targetHref,
+      {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+        referer: insweekBaseUrl()
+      }
+    );
+
+    await page.waitForTimeout(800);
+
+    const current =
+      await getInsweekCurrentPageNo(page);
+
+    const urlPageNo = (() => {
+      try {
+        return Number(
+          new URL(page.url())
+            .searchParams
+            .get('page')
+        );
+      } catch (_) {
+        return 0;
+      }
+    })();
+
+    console.log(
+      `페이지 ${pageNo} href 이동 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
+    );
+
+    return (
+      current === pageNo ||
+      urlPageNo === pageNo
+    );
+
+  } catch (e) {
+
+    console.log(
+      `페이지 ${pageNo} 실제 href 이동 실패: ${e.message}`
+    );
+
+    return false;
+  }
+}
 
 /* =========================================================
    현재 보험신보 목록 페이지에서
