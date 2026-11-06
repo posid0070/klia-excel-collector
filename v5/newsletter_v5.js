@@ -386,364 +386,208 @@ function insweekBaseUrl() {
 
 
 /* =========================================================
-   보험신보 실제 pagination URL 읽기
+   보험신보 페이지 번호 실제 클릭
 
    중요:
-   다른 pagination을 잘못 잡지 않도록
-
-   ul.pagination[aria-label="Pagination"]
-   +
-   sc_sub_section_code=S2N19
-
-   조건을 모두 사용함
+   - 매 페이지마다 먼저 1페이지 기본 주소로 들어간다.
+   - ul.pagination 안에서 숫자 2 / 3 링크를 실제로 클릭한다.
+   - 링크의 실제 href(page, total, 카테고리 값)를 그대로 사용한다.
+   - 클릭 후 현재 페이지 번호를 확인한다.
 ========================================================= */
 
-async function getInsweekPageUrls(page) {
+async function getInsweekCurrentPageNo(page) {
 
-  await page.goto(
-    insweekBaseUrl(),
-    {
-      waitUntil:
-        'domcontentloaded',
+  const text = await page
+    .locator(
+      'ul.pagination[aria-label="Pagination"] ' +
+      'li.pagination-item.current'
+    )
+    .first()
+    .textContent()
+    .catch(() => '');
 
-      timeout:
-        30000
-    }
+  const n = Number(
+    String(text || '').trim()
   );
 
+  return Number.isFinite(n) ? n : 0;
+}
 
-  /*
-    보험신보 pagination 예시:
 
-    <ul class="pagination" aria-label="Pagination">
-      <li class="pagination-item current">1</li>
-      <li class="pagination-item">
-        <a href="...page=2&amp;total=2120&amp;sc_sub_section_code=S2N19&amp;view_type=sm"
-           class="pagination-link">2</a>
-      </li>
-    </ul>
+async function clickInsweekPageNumber(
+  page,
+  pageNo
+) {
 
-    목록보다 pagination이 늦게 붙는 경우를 고려해 잠시 기다리되,
-    pagination이 없어도 전체 작업을 실패시키지 않는다.
-  */
+  const selector =
+    'ul.pagination[aria-label="Pagination"] ' +
+    'a.pagination-link';
 
   await page
-    .locator('ul.pagination')
+    .locator('ul.pagination[aria-label="Pagination"]')
     .first()
     .waitFor({
       state: 'attached',
-      timeout: 5000
+      timeout: 10000
     })
     .catch(() => {});
 
+  const candidates = page
+    .locator(selector)
+    .filter({
+      hasText: new RegExp(`^\\s*${pageNo}\\s*$`)
+    });
 
-  const pageUrls =
-    new Map();
+  const count = await candidates.count();
 
-
-  /* 1페이지는 기본 주소 */
-
-  pageUrls.set(
-    1,
-    insweekBaseUrl()
+  console.log(
+    `페이지번호 ${pageNo} 링크 후보: ${count}개`
   );
 
-
-  /* =======================================================
-     1차: 실제 DOM의 pagination 링크 전체 읽기
-  ======================================================= */
-
-  const domLinks =
-    await page
-      .locator(
-        'ul.pagination a.pagination-link'
-      )
-      .evaluateAll(
-        links =>
-          links.map(a => ({
-            href:
-              a.getAttribute('href') || '',
-
-            text:
-              (a.textContent || '').trim()
-          }))
-      )
-      .catch(() => []);
-
-
-  let discoveredTotal = '';
-
-
   for (
-    const item
-    of domLinks
+    let i = 0;
+    i < count;
+    i++
   ) {
 
-    if (
-      !item.href
-    ) {
-      continue;
-    }
+    const link = candidates.nth(i);
 
+    const visible = await link
+      .isVisible()
+      .catch(() => false);
 
-    try {
+    if (!visible) continue;
 
-      const absoluteHref =
-        new URL(
-          item.href.replace(/&amp;/g, '&'),
+    const rawHref = await link
+      .getAttribute('href')
+      .catch(() => '');
+
+    const onclick = await link
+      .getAttribute('onclick')
+      .catch(() => '');
+
+    console.log(
+      `페이지 ${pageNo} 링크 발견 | href=${rawHref || ''} | onclick=${onclick || ''}`
+    );
+
+    let absoluteHref = '';
+
+    if (rawHref) {
+      try {
+        absoluteHref = new URL(
+          String(rawHref)
+            .replace(/&amp;/g, '&')
+            .replace(/&#38;/g, '&'),
           page.url()
         ).href;
+      } catch (_) {}
+    }
 
+    /* 1순위: 실제 페이지 숫자 링크 클릭 */
+    try {
 
-      const url =
-        new URL(
-          absoluteHref
-        );
+      await Promise.all([
+        page
+          .waitForNavigation({
+            waitUntil: 'domcontentloaded',
+            timeout: 15000
+          })
+          .catch(() => null),
+        link.click({
+          force: true,
+          timeout: 10000
+        })
+      ]);
 
+      await page.waitForTimeout(800);
 
-      if (
-        url.searchParams.get(
-          'sc_sub_section_code'
-        ) !==
-        'S2N19'
-      ) {
-        continue;
-      }
+      const current =
+        await getInsweekCurrentPageNo(page);
 
-
-      const total =
-        url.searchParams.get(
-          'total'
-        );
-
-      if (
-        total &&
-        /^\d+$/.test(total)
-      ) {
-        discoveredTotal = total;
-      }
-
-
-      let pageNo =
-        Number(
-          url.searchParams.get(
-            'page'
-          )
-        );
-
-
-      if (
-        !Number.isFinite(pageNo) ||
-        pageNo < 2
-      ) {
-
-        const textPageNo =
-          Number(
-            String(item.text || '').trim()
+      const urlPageNo = (() => {
+        try {
+          return Number(
+            new URL(page.url())
+              .searchParams
+              .get('page')
           );
-
-        if (
-          Number.isFinite(textPageNo) &&
-          textPageNo >= 2
-        ) {
-          pageNo = textPageNo;
+        } catch (_) {
+          return 0;
         }
+      })();
 
-      }
-
+      console.log(
+        `페이지 ${pageNo} 클릭 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
+      );
 
       if (
-        Number.isFinite(pageNo) &&
-        pageNo >= 2
+        current === pageNo ||
+        urlPageNo === pageNo
       ) {
-
-        pageUrls.set(
-          pageNo,
-          absoluteHref
-        );
-
+        return true;
       }
 
     } catch (e) {
-
       console.log(
-        `pagination DOM 링크 해석 실패: ${item.href}`
+        `페이지 ${pageNo} 링크 클릭 실패: ${e.message}`
       );
-
     }
 
-  }
-
-
-  /* =======================================================
-     2차 fallback: 실제 HTML에서 page 링크 직접 복구
-  ======================================================= */
-
-  if (
-    !pageUrls.has(2) ||
-    !pageUrls.has(3)
-  ) {
-
-    const html =
-      await page.content();
-
-
-    const decodedHtml =
-      html
-        .replace(/&amp;/g, '&')
-        .replace(/&#38;/g, '&');
-
-
-    const hrefRegex =
-      /href=["']([^"']*articleList\.html\?[^"']*page=\d+[^"']*sc_sub_section_code=S2N19[^"']*)["']/gi;
-
-
-    let match;
-
-    while (
-      (match = hrefRegex.exec(decodedHtml)) !== null
-    ) {
+    /* 2순위: 같은 링크의 실제 href를 그대로 이동 */
+    if (absoluteHref) {
 
       try {
 
-        const absoluteHref =
-          new URL(
-            match[1],
-            page.url()
-          ).href;
+        console.log(
+          `페이지 ${pageNo} 실제 href 직접 이동: ${absoluteHref}`
+        );
 
+        await page.goto(
+          absoluteHref,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+            referer: insweekBaseUrl()
+          }
+        );
 
-        const url =
-          new URL(
-            absoluteHref
-          );
+        await page.waitForTimeout(800);
 
+        const current =
+          await getInsweekCurrentPageNo(page);
 
-        const pageNo =
-          Number(
-            url.searchParams.get('page')
-          );
+        const urlPageNo = (() => {
+          try {
+            return Number(
+              new URL(page.url())
+                .searchParams
+                .get('page')
+            );
+          } catch (_) {
+            return 0;
+          }
+        })();
 
-
-        const total =
-          url.searchParams.get('total');
+        console.log(
+          `페이지 ${pageNo} href 이동 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
+        );
 
         if (
-          total &&
-          /^\d+$/.test(total)
+          current === pageNo ||
+          urlPageNo === pageNo
         ) {
-          discoveredTotal = total;
-        }
-
-
-        if (
-          Number.isFinite(pageNo) &&
-          pageNo >= 2
-        ) {
-
-          pageUrls.set(
-            pageNo,
-            absoluteHref
-          );
-
+          return true;
         }
 
       } catch (e) {
-        /* 다른 링크는 무시 */
+        console.log(
+          `페이지 ${pageNo} 실제 href 이동 실패: ${e.message}`
+        );
       }
-
     }
-
   }
 
-
-  /* =======================================================
-     3차 fallback: 그래도 없으면 URL 직접 조립
-
-     페이지 링크를 못 읽었다는 이유만으로 뉴스레터 전체를 실패시키지
-     않는다. total 값이 있으면 함께 사용하고, 없어도 page 파라미터로
-     2/3페이지를 요청한다.
-  ======================================================= */
-
-  for (
-    const pageNo
-    of [2, 3]
-  ) {
-
-    if (
-      pageUrls.has(pageNo)
-    ) {
-      continue;
-    }
-
-
-    const url =
-      new URL(
-        insweekBaseUrl()
-      );
-
-
-    url.searchParams.set(
-      'page',
-      String(pageNo)
-    );
-
-
-    if (
-      discoveredTotal
-    ) {
-
-      url.searchParams.set(
-        'total',
-        discoveredTotal
-      );
-
-    }
-
-
-    pageUrls.set(
-      pageNo,
-      url.href
-    );
-
-
-    console.log(
-      `보험신보 ${pageNo}페이지 링크 fallback 사용: ${url.href}`
-    );
-
-  }
-
-
-  console.log(
-    '보험신보 pagination 확인'
-  );
-
-
-  for (
-    const [
-      pageNo,
-      url
-    ]
-    of [...pageUrls.entries()].sort(
-      (a, b) => a[0] - b[0]
-    )
-  ) {
-
-    if (
-      pageNo <= 3
-    ) {
-
-      console.log(
-        `  ${pageNo}페이지 → ${url}`
-      );
-
-    }
-
-  }
-
-
-  return pageUrls;
-
+  return false;
 }
 
 
@@ -944,38 +788,18 @@ async function collectInsweekList(
   const page =
     await browser.newPage();
 
-
   const start =
     `${TARGET_MONTH}-01`;
-
 
   const end =
     `${TARGET_MONTH}-31`;
 
-
   const map =
     new Map();
 
+  let previousSignature = '';
 
   try {
-
-    /*
-      먼저 사이트가 실제로 제공하는
-      pagination URL을 읽는다.
-
-      total=2120 같은 숫자는
-      직접 코드에 적지 않음.
-    */
-
-    const pageUrls =
-      await getInsweekPageUrls(
-        page
-      );
-
-
-    /*
-      1~3페이지 읽기
-    */
 
     for (
       let pageNo = 1;
@@ -983,91 +807,97 @@ async function collectInsweekList(
       pageNo++
     ) {
 
-      const targetUrl =
-        pageUrls.get(
-          pageNo
+      /*
+        예전에 정상 동작했던 방식:
+        매 페이지마다 1페이지 기본 주소로 다시 진입한 뒤
+        2·3페이지는 pagination 숫자 링크를 실제 클릭한다.
+      */
+      await page.goto(
+        insweekBaseUrl(),
+        {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        }
+      );
+
+      await page.waitForTimeout(900);
+
+      if (pageNo > 1) {
+
+        console.log(
+          `보험신보 ${pageNo}페이지 이동 시도`
         );
 
+        const clicked =
+          await clickInsweekPageNumber(
+            page,
+            pageNo
+          );
 
-      if (
-        !targetUrl
-      ) {
-
-        throw new Error(
-          `보험신보 신상품 ${pageNo}페이지 URL을 찾지 못했습니다.`
-        );
-
+        if (!clicked) {
+          throw new Error(
+            `보험신보 ${pageNo}페이지 숫자 링크 이동에 실패했습니다.`
+          );
+        }
       }
 
+      const currentPageNo =
+        await getInsweekCurrentPageNo(page);
 
       console.log(
         `보험신보 ${pageNo}페이지 확인`
       );
 
-
-      console.log(
-        `이동 URL: ${targetUrl}`
-      );
-
-
-      await page.goto(
-        targetUrl,
-        {
-
-          waitUntil:
-            'domcontentloaded',
-
-          timeout:
-            30000
-
-        }
-      );
-
-
-      await page.waitForTimeout(
-        1000
-      );
-
-
       console.log(
         `현재 URL: ${page.url()}`
       );
 
+      console.log(
+        `pagination 현재 페이지: ${currentPageNo || '확인불가'}`
+      );
 
       const raw =
         await extractCurrentList(
           page
         );
 
-
       console.log(
         `보험신보 ${pageNo}페이지 날짜+기사 추출: ${raw.length}건`
       );
 
-
-      /*
-        실제로 페이지가 달라졌는지
-        앞 5건 출력
-      */
-
       for (
         const item
-        of raw.slice(
-          0,
-          5
-        )
+        of raw.slice(0, 5)
       ) {
-
         console.log(
           `  ${item.dateText} | ${item.title}`
         );
-
       }
 
-
       /*
-        대상월 기사만 수집
+        URL만 바뀌고 실제 기사 목록은 1페이지 그대로인 경우를 방지한다.
       */
+      const signature =
+        raw
+          .slice(0, 5)
+          .map(
+            x => x.url || x.title || ''
+          )
+          .join('|');
+
+      if (
+        pageNo > 1 &&
+        signature &&
+        signature === previousSignature
+      ) {
+        throw new Error(
+          `보험신보 ${pageNo}페이지 기사 목록이 직전 페이지와 동일합니다.`
+        );
+      }
+
+      if (signature) {
+        previousSignature = signature;
+      }
 
       for (
         const item
@@ -1079,67 +909,39 @@ async function collectInsweekList(
           !item.title ||
           !item.dateText
         ) {
-
           continue;
-
         }
-
 
         const articleDate =
           parseInsweekDate(
             item.dateText
           );
 
-
         if (
           !articleDate ||
           articleDate < start ||
           articleDate > end
         ) {
-
           continue;
-
         }
 
-
         const title =
-          clean(
-            item.title
-          );
-
+          clean(item.title);
 
         const url =
-          item.url
-            .split('#')[0];
+          item.url.split('#')[0];
 
-
-        /*
-          URL 기준 중복 제거
-        */
-
-        if (
-          !map.has(
-            url
-          )
-        ) {
-
+        if (!map.has(url)) {
           map.set(
             url,
             {
-
               title,
-
               url,
-
               articleDate
-
             }
           );
-
         }
-
       }
-
     }
 
   } finally {
@@ -1148,37 +950,29 @@ async function collectInsweekList(
 
   }
 
-
   const results =
     [...map.values()]
       .sort(
         (a, b) =>
-          a.articleDate
-            .localeCompare(
-              b.articleDate
-            )
+          a.articleDate.localeCompare(
+            b.articleDate
+          )
       );
-
 
   console.log(
     `보험신보 ${TARGET_MONTH} 대상월 기사: ${results.length}건`
   );
 
-
   for (
     const article
     of results
   ) {
-
     console.log(
       `${article.articleDate} | ${article.title}`
     );
-
   }
 
-
   return results;
-
 }
 
 
@@ -2638,10 +2432,6 @@ async function main() {
     `생보협회 상품 수: ${meta.productCount}`
   );
 
-
-  console.log(
-    `생보협회 급부 항목 수: ${meta.benefitCount}`
-  );
 
 
   const browser =
