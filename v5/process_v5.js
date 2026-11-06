@@ -152,7 +152,8 @@ function decodeHtmlEntities(v) {
     middot: '·',
     hellip: '…',
     ndash: '–',
-    mdash: '—'
+    mdash: '—',
+    times: '×'
   };
 
   /*
@@ -216,22 +217,38 @@ function isProductVariantText(value) {
     표준형
     건강체형
     50%형
+    100%환급형
     해약환급금미지급형V2
-    해약환급금미지급형 V2
-    해약환급금일부지급형V3
     해약환급금미지급형Ⅱ
-    납입면제형III
+    간편심사형(3.10.5)
+    해약환급금미지급형(V2)
+    납입면제형[Ⅱ]
     1종 / 2종 / 제1종 / 제2종
 
-    원칙:
-    1) '~형'으로 끝나거나
-    2) '~형' 뒤에 버전표시(V2, Ⅱ, III, 2 등)만 붙거나
-    3) '제1종', '2종'처럼 종 구분 자체인 경우
+    핵심:
+    '~형' 또는 '종' 뒤에 붙는 버전표시/세부표기는
+    상품형태의 일부로 함께 보존한다.
   */
 
-  const compact = text
+  let compact = text
     .replace(/\s+/g, '')
     .replace(/[._-]+/g, '');
+
+  /*
+    끝에 붙은 세부표기 괄호를 판별용 문자열에서만 제거한다.
+    원문은 variants에 그대로 저장하므로
+    '간편심사형(3.10.5)' 형태는 그대로 유지된다.
+  */
+  let previous = null;
+
+  while (previous !== compact) {
+    previous = compact;
+
+    compact = compact.replace(
+      /(?:\([^()]*\)|（[^（）]*）|\[[^\[\]]*\]|［[^［］]*］|\{[^{}]*\})$/u,
+      ''
+    );
+  }
 
   const typeWithOptionalVersion =
     /형(?:(?:V|VER|VERSION)?\d+|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+|[IVX]+)?$/iu;
@@ -247,23 +264,146 @@ function isProductVariantText(value) {
 }
 
 
+function splitTopLevelParts(text) {
+
+  const separators = new Set([
+    ',', '，', '|', '·', 'ㆍ', ';', '；'
+  ]);
+
+  const openToClose = {
+    '(': ')',
+    '（': '）',
+    '[': ']',
+    '［': '］',
+    '{': '}'
+  };
+
+  const stack = [];
+  const parts = [];
+  let current = '';
+
+  for (const ch of String(text || '')) {
+
+    if (openToClose[ch]) {
+      stack.push(openToClose[ch]);
+      current += ch;
+      continue;
+    }
+
+    if (
+      stack.length &&
+      ch === stack[stack.length - 1]
+    ) {
+      stack.pop();
+      current += ch;
+      continue;
+    }
+
+    if (
+      stack.length === 0 &&
+      separators.has(ch)
+    ) {
+      const value = clean(current);
+
+      if (value) {
+        parts.push(value);
+      }
+
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  const last = clean(current);
+
+  if (last) {
+    parts.push(last);
+  }
+
+  return parts;
+
+}
+
+
+function replaceBalancedBracketGroups(input, replacer) {
+
+  const text = String(input || '');
+
+  const openToClose = {
+    '(': ')',
+    '（': '）',
+    '[': ']',
+    '［': '］',
+    '{': '}'
+  };
+
+  let result = '';
+  let i = 0;
+
+  while (i < text.length) {
+
+    const open = text[i];
+
+    if (!openToClose[open]) {
+      result += open;
+      i++;
+      continue;
+    }
+
+    const start = i;
+    const stack = [openToClose[open]];
+    i++;
+
+    while (
+      i < text.length &&
+      stack.length
+    ) {
+
+      const ch = text[i];
+
+      if (openToClose[ch]) {
+        stack.push(openToClose[ch]);
+      } else if (
+        ch === stack[stack.length - 1]
+      ) {
+        stack.pop();
+      }
+
+      i++;
+    }
+
+    /* 닫히지 않은 괄호는 원문 그대로 남긴다. */
+    if (stack.length) {
+      result += text.slice(start);
+      break;
+    }
+
+    const group = text.slice(start, i);
+    result += replacer(group);
+  }
+
+  return result;
+
+}
+
+
 function splitProductName(productName) {
 
   const original = clean(productName);
   const variants = [];
 
   /*
-    (), [], {}, 전각 괄호/대괄호까지 처리한다.
-    예:
-    (해약환급금미지급형V2)
-    [해약환급금미지급형Ⅱ]
-    （일반심사형）
-  */
-  const bracketPattern =
-    /(\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}|（[^（）]*）|［[^［］]*］)/g;
+    중첩 괄호까지 하나의 그룹으로 읽는다.
 
-  const normalized = original.replace(
-    bracketPattern,
+    예:
+    (간편심사형(3.10.5))
+    (해약환급금미지급형(V2))
+    (무배당, 간편심사형(3.10.5))
+  */
+  const normalized = replaceBalancedBracketGroups(
+    original,
     group => {
 
       const open = group[0];
@@ -277,13 +417,25 @@ function splitProductName(productName) {
       }
 
       /*
-        한 괄호 안에 여러 속성이 들어있는 경우 분리한다.
-        예: (무배당, 일반심사형, 해약환급금미지급형V2)
+        먼저 최상위 구분자로 나눈다.
+        중첩 괄호 안의 쉼표/구분자는 건드리지 않는다.
       */
-      const parts = content
-        .split(/[,，|·ㆍ;；]+/)
-        .map(x => clean(x))
-        .filter(Boolean);
+      const parts = splitTopLevelParts(content);
+
+      /*
+        괄호 전체가 하나의 상품형태라면
+        세부 괄호까지 통째로 상품형태로 이동한다.
+
+        단, "무배당, 간편심사형(...)"처럼
+        여러 항목이 섞여 있으면 전체를 하나의 형태로 보지 않는다.
+      */
+      if (
+        parts.length === 1 &&
+        isProductVariantText(content)
+      ) {
+        variants.push(content);
+        return '';
+      }
 
       const keep = [];
 
@@ -297,28 +449,10 @@ function splitProductName(productName) {
 
       }
 
-      /*
-        괄호 전체가 상품형태 하나인 경우
-        정리상품명에서는 괄호째 제거한다.
-      */
-      if (
-        parts.length === 1 &&
-        isProductVariantText(content)
-      ) {
-        return '';
-      }
-
-      /*
-        괄호 안의 모든 항목이 상품형태였다면
-        괄호 자체를 제거한다.
-      */
       if (!keep.length) {
         return '';
       }
 
-      /*
-        무배당 등 상품형태가 아닌 내용은 원래 괄호 형태로 보존한다.
-      */
       return `${open}${keep.join(', ')}${close}`;
 
     }
@@ -329,9 +463,6 @@ function splitProductName(productName) {
     상품명_100%환급형
     상품명_50%환급형V2
     상품명_제1종
-
-    언더바 뒤의 한 덩어리 전체가 상품형태로 판단되는 경우에만
-    정리상품명에서 제거하므로 일반적인 상품명 언더바는 보존한다.
   */
   .replace(/_([^_()\[\]{}（）［］]+)(?=_|$)/gu, (match, part) => {
 

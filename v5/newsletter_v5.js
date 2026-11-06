@@ -154,7 +154,8 @@ function decodeHtmlEntities(v) {
     middot: '·',
     hellip: '…',
     ndash: '–',
-    mdash: '—'
+    mdash: '—',
+    times: '×'
   };
 
   for (let pass = 0; pass < 3; pass++) {
@@ -1269,185 +1270,62 @@ function filterLifeInsuranceArticles(
 
 
 /* =========================================================
-   보험신보 4건 선정
+   보험신보 5건 선정
 
    1~10일  : 1건
    11~20일 : 2건
-   21~말일 : 1건
+   21~말일 : 2건
 ========================================================= */
 
-function selectFourArticles(
+function selectFiveArticles(
   articles
 ) {
 
-  const bucket1 =
-    articles.filter(
-      article => {
+  const bucket1 = articles.filter(article => {
+    const day = Number(article.articleDate.slice(8, 10));
+    return day >= 1 && day <= 10;
+  });
 
-        const day =
-          Number(
-            article.articleDate.slice(
-              8,
-              10
-            )
-          );
+  const bucket2 = articles.filter(article => {
+    const day = Number(article.articleDate.slice(8, 10));
+    return day >= 11 && day <= 20;
+  });
 
-
-        return (
-          day >= 1 &&
-          day <= 10
-        );
-
-      }
-    );
-
-
-  const bucket2 =
-    articles.filter(
-      article => {
-
-        const day =
-          Number(
-            article.articleDate.slice(
-              8,
-              10
-            )
-          );
-
-
-        return (
-          day >= 11 &&
-          day <= 20
-        );
-
-      }
-    );
-
-
-  const bucket3 =
-    articles.filter(
-      article => {
-
-        const day =
-          Number(
-            article.articleDate.slice(
-              8,
-              10
-            )
-          );
-
-
-        return (
-          day >= 21
-        );
-
-      }
-    );
-
+  const bucket3 = articles.filter(article => {
+    const day = Number(article.articleDate.slice(8, 10));
+    return day >= 21;
+  });
 
   const picked = [
-
-    ...seededPick(
-      bucket1,
-      1,
-      `${TARGET_MONTH}|1-10`
-    ),
-
-    ...seededPick(
-      bucket2,
-      2,
-      `${TARGET_MONTH}|11-20`
-    ),
-
-    ...seededPick(
-      bucket3,
-      1,
-      `${TARGET_MONTH}|21-end`
-    )
-
+    ...seededPick(bucket1, 1, `${TARGET_MONTH}|1-10`),
+    ...seededPick(bucket2, 2, `${TARGET_MONTH}|11-20`),
+    ...seededPick(bucket3, 2, `${TARGET_MONTH}|21-end`)
   ];
 
-
-  /*
-    중복 URL 제거
-  */
-
   const uniquePicked = [];
+  const used = new Set();
 
-
-  const used =
-    new Set();
-
-
-  for (
-    const item
-    of picked
-  ) {
-
-    if (
-      used.has(
-        item.url
-      )
-    ) {
-
+  for (const item of picked) {
+    if (!item || used.has(item.url)) {
       continue;
-
     }
-
-
-    used.add(
-      item.url
-    );
-
-
-    uniquePicked.push(
-      item
-    );
-
+    used.add(item.url);
+    uniquePicked.push(item);
   }
 
-
-  /*
-    특정 구간에 기사가 부족하면
-    나머지 기사에서 보충
-  */
-
-  if (
-    uniquePicked.length < 4
-  ) {
-
-    const remaining =
-      articles.filter(
-        article =>
-          !used.has(
-            article.url
-          )
-      );
-
+  if (uniquePicked.length < 5) {
+    const remaining = articles.filter(article => !used.has(article.url));
 
     uniquePicked.push(
-
       ...seededPick(
-
         remaining,
-
-        4 -
-          uniquePicked.length,
-
+        5 - uniquePicked.length,
         `${TARGET_MONTH}|fallback`
-
       )
-
     );
-
   }
 
-
-  return uniquePicked.slice(
-    0,
-    4
-  );
-
+  return uniquePicked.slice(0, 5);
 }
 
 
@@ -1546,34 +1424,42 @@ function buildDisclosureCards(
           `
           : '';
 
+        const isSavingCategory = [
+          '연금',
+          '저축',
+          '교육'
+        ].includes(clean(item.카테고리));
+
         const hasBenefit = Boolean(
           clean(item.급부명칭) ||
           clean(item.지급사유) ||
           clean(item.지급금액)
         );
 
-        const benefitHtml = hasBenefit
-          ? [
-              buildBenefitBlock('급부명칭', item.급부명칭),
-              buildBenefitBlock('지급사유', item.지급사유),
-              buildBenefitBlock('지급금액', item.지급금액)
-            ].join('')
-          : `
-            <table
-              width="100%"
-              cellpadding="0"
-              cellspacing="0"
-              border="0"
-              role="presentation"
-              style="margin-top:8px;background:#FAFAFA;border:1px solid #EEEEEE;border-radius:7px;"
-            >
-              <tr>
-                <td style="padding:10px 12px;font-size:12px;color:#888888;line-height:1.7;">
-                  급부 상세 미표기
-                </td>
-              </tr>
-            </table>
-          `;
+        const benefitHtml = isSavingCategory
+          ? ''
+          : hasBenefit
+            ? [
+                buildBenefitBlock('급부명칭', item.급부명칭),
+                buildBenefitBlock('지급사유', item.지급사유),
+                buildBenefitBlock('지급금액', item.지급금액)
+              ].join('')
+            : `
+              <table
+                width="100%"
+                cellpadding="0"
+                cellspacing="0"
+                border="0"
+                role="presentation"
+                style="margin-top:8px;background:#FAFAFA;border:1px solid #EEEEEE;border-radius:7px;"
+              >
+                <tr>
+                  <td style="padding:10px 12px;font-size:12px;color:#888888;line-height:1.7;">
+                    급부 상세 미표기
+                  </td>
+                </tr>
+              </table>
+            `;
 
         return `
 
@@ -1800,29 +1686,31 @@ function buildCategoryCountRows(
 
   const rows = [];
 
-  for (let i = 0; i < items.length; i += 2) {
+  for (let i = 0; i < items.length; i += 3) {
+    const group = items.slice(i, i + 3);
 
-    const left = items[i];
-    const right = items[i + 1];
+    while (group.length < 3) {
+      group.push(null);
+    }
 
     rows.push(`
       <tr>
-        <td style="padding:5px 8px 5px 0;width:50%;vertical-align:top;">
-          <span style="font-size:12px;color:#666666;">${escapeHtml(left.category)}</span>
-          <strong style="font-size:12px;color:#222222;"> ${left.count}건</strong>
-        </td>
-        <td style="padding:5px 0 5px 8px;width:50%;vertical-align:top;">
-          ${right
-            ? `<span style="font-size:12px;color:#666666;">${escapeHtml(right.category)}</span><strong style="font-size:12px;color:#222222;"> ${right.count}건</strong>`
-            : ''}
-        </td>
+        ${group.map((item, colIndex) => `
+          <td style="
+            padding:6px ${colIndex === 2 ? '0' : '10px'} 6px ${colIndex === 0 ? '0' : '10px'};
+            width:33.33%;
+            vertical-align:top;
+          ">
+            ${item
+              ? `<span style="font-size:12px;color:#666666;white-space:nowrap;">${escapeHtml(item.category)}</span><br><strong style="font-size:12px;color:#222222;">${item.count}건</strong>`
+              : ''}
+          </td>
+        `).join('')}
       </tr>
     `);
-
   }
 
   return rows.join('');
-
 }
 
 
@@ -2052,18 +1940,17 @@ ${monthNumber}월 민영사 신상품 동향
   line-height:1.85;
 ">
 
-${monthNumber}월 생명보험협회 판매일자 기준
+${monthNumber}월 생명보험협회 판매일자 기준 <strong>상품 ${meta.productCount}건</strong>이 확인되었습니다.
 
-<strong>
-상품 ${meta.productCount}건
-</strong>
+</p>
 
-이 확인되었습니다.
-
-동일 상품이 보험기간·급부 등에 따라
-여러 행으로 구성된 경우
-상품 수는 1건으로 계산했습니다.
-
+<p style="
+  margin:10px 0 0 0;
+  font-size:11px;
+  color:#AAAAAA;
+  line-height:1.7;
+">
+(동일 상품이 보험기간·급부 등에 따라 여러 행으로 구성된 경우 상품 수는 1건으로 계산했습니다.)
 </p>
 
 <table
@@ -2173,7 +2060,7 @@ NEWS PICK
   margin:11px 0 4px 0;
 ">
 
-보험신보 신상품 ${articles.length}선
+보험신보 신상품 5선
 
 </h2>
 
@@ -2542,11 +2429,11 @@ async function main() {
 
     /*
       4.
-      4건 선정
+      5건 선정
     */
 
     selected =
-      selectFourArticles(
+      selectFiveArticles(
         lifeArticles
       );
 
