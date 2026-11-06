@@ -83,8 +83,6 @@ jobs:
         if: steps.schedule_check.outputs.run == 'true'
         env:
           TARGET_MONTH: ${{ steps.target.outputs.month }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.5-flash-lite
           V5_MAIL_URL: ${{ secrets.V5_MAIL_URL }}
           V5_MAIL_SECRET: ${{ secrets.V5_MAIL_SECRET }}
           SEND_MAIL: ${{ steps.target.outputs.send_mail }}
