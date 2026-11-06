@@ -201,25 +201,87 @@ function clean(v) {
 }
 
 
+function isProductVariantText(value) {
+
+  const text = clean(value);
+
+  if (!text) {
+    return false;
+  }
+
+  /*
+    상품형태로 인정하는 예시
+
+    일반심사형
+    표준형
+    건강체형
+    50%형
+    해약환급금미지급형V2
+    해약환급금미지급형 V2
+    해약환급금일부지급형V3
+    해약환급금미지급형Ⅱ
+    납입면제형III
+    1종 / 2종 / 제1종 / 제2종
+
+    원칙:
+    1) '~형'으로 끝나거나
+    2) '~형' 뒤에 버전표시(V2, Ⅱ, III, 2 등)만 붙거나
+    3) '제1종', '2종'처럼 종 구분 자체인 경우
+  */
+
+  const compact = text
+    .replace(/\s+/g, '')
+    .replace(/[._-]+/g, '');
+
+  const typeWithOptionalVersion =
+    /형(?:(?:V|VER|VERSION)?\d+|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+|[IVX]+)?$/iu;
+
+  const numberedClass =
+    /^(?:제)?(?:\d+|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+|[IVX]+)종$/iu;
+
+  return (
+    typeWithOptionalVersion.test(compact) ||
+    numberedClass.test(compact)
+  );
+
+}
+
+
 function splitProductName(productName) {
 
   const original = clean(productName);
   const variants = [];
 
+  /*
+    (), [], {}, 전각 괄호/대괄호까지 처리한다.
+    예:
+    (해약환급금미지급형V2)
+    [해약환급금미지급형Ⅱ]
+    （일반심사형）
+  */
+  const bracketPattern =
+    /(\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}|（[^（）]*）|［[^［］]*］)/g;
+
   const normalized = original.replace(
-    /(\([^()]*\)|\[[^\[\]]*\])/g,
+    bracketPattern,
     group => {
 
       const open = group[0];
       const close = group[group.length - 1];
-      const content = group.slice(1, -1).trim();
+      const content = clean(
+        group.slice(1, -1)
+      );
 
       if (!content) {
         return group;
       }
 
+      /*
+        한 괄호 안에 여러 속성이 들어있는 경우 분리한다.
+        예: (무배당, 일반심사형, 해약환급금미지급형V2)
+      */
       const parts = content
-        .split(/[,，|·ㆍ;/]+/)
+        .split(/[,，|·ㆍ;；]+/)
         .map(x => clean(x))
         .filter(Boolean);
 
@@ -227,7 +289,7 @@ function splitProductName(productName) {
 
       for (const part of parts) {
 
-        if (/형\s*$/u.test(part)) {
+        if (isProductVariantText(part)) {
           variants.push(part);
         } else {
           keep.push(part);
@@ -236,32 +298,82 @@ function splitProductName(productName) {
       }
 
       /*
-        구분자가 없지만 괄호 전체가 ~형으로 끝나는 경우도 추출
+        괄호 전체가 상품형태 하나인 경우
+        정리상품명에서는 괄호째 제거한다.
       */
-      if (parts.length === 1 && /형\s*$/u.test(content)) {
-        if (!variants.includes(content)) {
-          variants.push(content);
-        }
+      if (
+        parts.length === 1 &&
+        isProductVariantText(content)
+      ) {
         return '';
       }
 
+      /*
+        괄호 안의 모든 항목이 상품형태였다면
+        괄호 자체를 제거한다.
+      */
       if (!keep.length) {
         return '';
       }
 
+      /*
+        무배당 등 상품형태가 아닌 내용은 원래 괄호 형태로 보존한다.
+      */
       return `${open}${keep.join(', ')}${close}`;
 
     }
   )
+  /*
+    괄호 밖에서 언더바로 붙는 상품형태도 분리한다.
+    예:
+    상품명_100%환급형
+    상품명_50%환급형V2
+    상품명_제1종
+
+    언더바 뒤의 한 덩어리 전체가 상품형태로 판단되는 경우에만
+    정리상품명에서 제거하므로 일반적인 상품명 언더바는 보존한다.
+  */
+  .replace(/_([^_()\[\]{}（）［］]+)(?=_|$)/gu, (match, part) => {
+
+    const candidate = clean(part);
+
+    if (isProductVariantText(candidate)) {
+      variants.push(candidate);
+      return '';
+    }
+
+    return match;
+
+  })
+  .replace(/_{2,}/g, '_')
+  .replace(/^_+|_+$/g, '')
   .replace(/\s+/g, ' ')
-  .replace(/\s+([)\]])/g, '$1')
+  .replace(/\s+([)\]］）}])/g, '$1')
   .trim();
 
-  const uniqueVariants = [
-    ...new Set(
-      variants.map(x => clean(x))
-    )
-  ];
+  /*
+    동일한 형태가 반복되어도 한 번만 표시한다.
+    띄어쓰기/대소문자 차이는 동일 항목으로 본다.
+  */
+  const seen = new Set();
+  const uniqueVariants = [];
+
+  for (const variant of variants) {
+
+    const key = clean(variant)
+      .replace(/\s+/g, '')
+      .toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    uniqueVariants.push(
+      clean(variant)
+    );
+
+  }
 
   return {
     original,
