@@ -412,35 +412,36 @@ async function getInsweekPageUrls(page) {
   );
 
 
-  await page.waitForTimeout(
-    1000
-  );
+  /*
+    보험신보 pagination 예시:
 
+    <ul class="pagination" aria-label="Pagination">
+      <li class="pagination-item current">1</li>
+      <li class="pagination-item">
+        <a href="...page=2&amp;total=2120&amp;sc_sub_section_code=S2N19&amp;view_type=sm"
+           class="pagination-link">2</a>
+      </li>
+    </ul>
 
-  const hrefs =
-    await page
+    목록보다 pagination이 늦게 붙는 경우를 고려해 잠시 기다리되,
+    pagination이 없어도 전체 작업을 실패시키지 않는다.
+  */
 
-      .locator(
-        'ul.pagination[aria-label="Pagination"] ' +
-        'a.pagination-link[href*="sc_sub_section_code=S2N19"]'
-      )
-
-      .evaluateAll(
-        links =>
-          links.map(
-            a =>
-              a.href
-          )
-      );
+  await page
+    .locator('ul.pagination')
+    .first()
+    .waitFor({
+      state: 'attached',
+      timeout: 5000
+    })
+    .catch(() => {});
 
 
   const pageUrls =
     new Map();
 
 
-  /*
-    1페이지는 현재 기본 주소
-  */
+  /* 1페이지는 기본 주소 */
 
   pageUrls.set(
     1,
@@ -448,27 +449,57 @@ async function getInsweekPageUrls(page) {
   );
 
 
-  /*
-    실제 사이트에서 제공하는
-    2페이지 이후 URL 읽기
-  */
+  /* =======================================================
+     1차: 실제 DOM의 pagination 링크 전체 읽기
+  ======================================================= */
+
+  const domLinks =
+    await page
+      .locator(
+        'ul.pagination a.pagination-link'
+      )
+      .evaluateAll(
+        links =>
+          links.map(a => ({
+            href:
+              a.getAttribute('href') || '',
+
+            text:
+              (a.textContent || '').trim()
+          }))
+      )
+      .catch(() => []);
+
+
+  let discoveredTotal = '';
+
 
   for (
-    const href
-    of hrefs
+    const item
+    of domLinks
   ) {
+
+    if (
+      !item.href
+    ) {
+      continue;
+    }
+
 
     try {
 
+      const absoluteHref =
+        new URL(
+          item.href.replace(/&amp;/g, '&'),
+          page.url()
+        ).href;
+
+
       const url =
         new URL(
-          href
+          absoluteHref
         );
 
-
-      /*
-        반드시 신상품 카테고리
-      */
 
       if (
         url.searchParams.get(
@@ -476,29 +507,24 @@ async function getInsweekPageUrls(page) {
         ) !==
         'S2N19'
       ) {
-
         continue;
-
       }
 
 
-      /*
-        반드시 view_type=sm
-      */
+      const total =
+        url.searchParams.get(
+          'total'
+        );
 
       if (
-        url.searchParams.get(
-          'view_type'
-        ) !==
-        'sm'
+        total &&
+        /^\d+$/.test(total)
       ) {
-
-        continue;
-
+        discoveredTotal = total;
       }
 
 
-      const pageNo =
+      let pageNo =
         Number(
           url.searchParams.get(
             'page'
@@ -507,15 +533,33 @@ async function getInsweekPageUrls(page) {
 
 
       if (
-        Number.isFinite(
-          pageNo
-        ) &&
+        !Number.isFinite(pageNo) ||
+        pageNo < 2
+      ) {
+
+        const textPageNo =
+          Number(
+            String(item.text || '').trim()
+          );
+
+        if (
+          Number.isFinite(textPageNo) &&
+          textPageNo >= 2
+        ) {
+          pageNo = textPageNo;
+        }
+
+      }
+
+
+      if (
+        Number.isFinite(pageNo) &&
         pageNo >= 2
       ) {
 
         pageUrls.set(
           pageNo,
-          href
+          absoluteHref
         );
 
       }
@@ -523,7 +567,7 @@ async function getInsweekPageUrls(page) {
     } catch (e) {
 
       console.log(
-        `페이지 URL 해석 실패: ${href}`
+        `pagination DOM 링크 해석 실패: ${item.href}`
       );
 
     }
@@ -531,9 +575,144 @@ async function getInsweekPageUrls(page) {
   }
 
 
-  /*
-    확인용 로그
-  */
+  /* =======================================================
+     2차 fallback: 실제 HTML에서 page 링크 직접 복구
+  ======================================================= */
+
+  if (
+    !pageUrls.has(2) ||
+    !pageUrls.has(3)
+  ) {
+
+    const html =
+      await page.content();
+
+
+    const decodedHtml =
+      html
+        .replace(/&amp;/g, '&')
+        .replace(/&#38;/g, '&');
+
+
+    const hrefRegex =
+      /href=["']([^"']*articleList\.html\?[^"']*page=\d+[^"']*sc_sub_section_code=S2N19[^"']*)["']/gi;
+
+
+    let match;
+
+    while (
+      (match = hrefRegex.exec(decodedHtml)) !== null
+    ) {
+
+      try {
+
+        const absoluteHref =
+          new URL(
+            match[1],
+            page.url()
+          ).href;
+
+
+        const url =
+          new URL(
+            absoluteHref
+          );
+
+
+        const pageNo =
+          Number(
+            url.searchParams.get('page')
+          );
+
+
+        const total =
+          url.searchParams.get('total');
+
+        if (
+          total &&
+          /^\d+$/.test(total)
+        ) {
+          discoveredTotal = total;
+        }
+
+
+        if (
+          Number.isFinite(pageNo) &&
+          pageNo >= 2
+        ) {
+
+          pageUrls.set(
+            pageNo,
+            absoluteHref
+          );
+
+        }
+
+      } catch (e) {
+        /* 다른 링크는 무시 */
+      }
+
+    }
+
+  }
+
+
+  /* =======================================================
+     3차 fallback: 그래도 없으면 URL 직접 조립
+
+     페이지 링크를 못 읽었다는 이유만으로 뉴스레터 전체를 실패시키지
+     않는다. total 값이 있으면 함께 사용하고, 없어도 page 파라미터로
+     2/3페이지를 요청한다.
+  ======================================================= */
+
+  for (
+    const pageNo
+    of [2, 3]
+  ) {
+
+    if (
+      pageUrls.has(pageNo)
+    ) {
+      continue;
+    }
+
+
+    const url =
+      new URL(
+        insweekBaseUrl()
+      );
+
+
+    url.searchParams.set(
+      'page',
+      String(pageNo)
+    );
+
+
+    if (
+      discoveredTotal
+    ) {
+
+      url.searchParams.set(
+        'total',
+        discoveredTotal
+      );
+
+    }
+
+
+    pageUrls.set(
+      pageNo,
+      url.href
+    );
+
+
+    console.log(
+      `보험신보 ${pageNo}페이지 링크 fallback 사용: ${url.href}`
+    );
+
+  }
+
 
   console.log(
     '보험신보 pagination 확인'
@@ -545,7 +724,9 @@ async function getInsweekPageUrls(page) {
       pageNo,
       url
     ]
-    of pageUrls
+    of [...pageUrls.entries()].sort(
+      (a, b) => a[0] - b[0]
+    )
   ) {
 
     if (
