@@ -8,14 +8,6 @@ on:
         required: false
         type: string
 
-  schedule:
-    # 매일 UTC 22:00에 호출
-    # = 한국시간(KST) 다음날 오전 7:00
-    # 아래 Check monthly schedule 단계에서
-    # 한국시간 기준 매월 1일에만 실제 작업 실행
-    - cron: '0 22 * * *'
-
-
 jobs:
   scrape:
     runs-on: ubuntu-latest
