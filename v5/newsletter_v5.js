@@ -415,223 +415,109 @@ async function getInsweekCurrentPageNo(page) {
 }
 
 
-async function clickInsweekPageNumber(
-  page,
-  pageNo
-) {
 
-  await page
-    .locator('ul.pagination[aria-label="Pagination"]')
+/* =========================================================
+   보험신보 페이지 이동
+   - 실제 보험신보 URL 사용
+   - page=1~15 직접 접속
+   - 페이지 숫자 링크 클릭 불필요
+========================================================= */
+
+async function getInsweekCurrentPageNo(page) {
+  const urlPageNo = Number(
+    new URL(page.url()).searchParams.get('page')
+  );
+
+  if (urlPageNo > 0) {
+    return urlPageNo;
+  }
+
+  const current = await page
+    .locator('ul.pagination li.pagination-item.current')
     .first()
-    .waitFor({
-      state: 'attached',
-      timeout: 10000
-    })
-    .catch(() => {});
+    .textContent()
+    .catch(() => '');
 
-  /*
-    페이지 숫자 텍스트가 아니라 실제 href의 page 파라미터를 기준으로 찾는다.
+  return Number(String(current || '').trim()) || 1;
+}
 
-    예)
-    <a href="...articleList.html?page=2&total=2120&sc_sub_section_code=S2N19&view_type=sm"
-       class="pagination-link">2</a>
-  */
-  const links = page.locator(
-    'ul.pagination[aria-label="Pagination"] ' +
-    'a.pagination-link[href*="page="]'
+async function clickInsweekPageNumber(page, pageNo) {
+  const url = new URL(
+    'https://www.insweek.co.kr/news/articleList.html'
   );
 
-  const count = await links.count();
+  const params = {
+    page: String(pageNo),
+    total: '2120',
+    sc_section_code: '',
+    sc_sub_section_code: 'S2N19',
+    sc_serial_code: '',
+    sc_area: '',
+    sc_level: '',
+    sc_article_type: '',
+    sc_view_level: '',
+    sc_sdate: '',
+    sc_edate: '',
+    sc_serial_number: '',
+    sc_word: '',
+    sc_andor: '',
+    sc_word2: '',
+    box_idxno: '',
+    sc_multi_code: '',
+    sc_is_image: '',
+    sc_is_movie: '',
+    sc_user_name: '',
+    sc_order_by: 'E'
+  };
 
-  console.log(
-    `pagination page=${pageNo} 링크 탐색: 전체 ${count}개`
-  );
-
-  let targetLink = null;
-  let targetHref = '';
-
-  for (
-    let i = 0;
-    i < count;
-    i++
-  ) {
-
-    const link = links.nth(i);
-
-    const rawHref = await link
-      .getAttribute('href')
-      .catch(() => '');
-
-    if (!rawHref) continue;
-
-    try {
-
-      const absoluteHref = new URL(
-        String(rawHref)
-          .replace(/&amp;/g, '&')
-          .replace(/&#38;/g, '&'),
-        page.url()
-      ).href;
-
-      const url = new URL(absoluteHref);
-
-      const hrefPageNo = Number(
-        url.searchParams.get('page')
-      );
-
-      const category =
-        url.searchParams.get(
-          'sc_sub_section_code'
-        );
-
-      const viewType =
-        url.searchParams.get(
-          'view_type'
-        );
-
-      if (
-        hrefPageNo === pageNo &&
-        category === 'S2N19' &&
-        viewType === 'sm'
-      ) {
-
-        targetLink = link;
-        targetHref = absoluteHref;
-        break;
-      }
-
-    } catch (_) {}
-  }
-
-  if (!targetLink || !targetHref) {
-
-    console.log(
-      `pagination에서 page=${pageNo} 정확한 href를 찾지 못했습니다.`
-    );
-
-    return false;
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
   }
 
   console.log(
-    `페이지 ${pageNo} 정확한 링크 발견: ${targetHref}`
+    `보험신보 ${pageNo}페이지 직접 접속: ${url.toString()}`
   );
 
-  /* 1순위: 보험신보가 제공한 실제 링크를 클릭 */
   try {
+    const response = await page.goto(url.toString(), {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    });
 
-    await Promise.all([
-      page
-        .waitForNavigation({
-          waitUntil: 'domcontentloaded',
-          timeout: 15000
-        })
-        .catch(() => null),
-      targetLink.click({
-        force: true,
-        timeout: 10000
-      })
-    ]);
-
-    await page.waitForTimeout(800);
-
-    const current =
-      await getInsweekCurrentPageNo(page);
-
-    const urlPageNo = (() => {
-      try {
-        return Number(
-          new URL(page.url())
-            .searchParams
-            .get('page')
-        );
-      } catch (_) {
-        return 0;
-      }
-    })();
-
-    console.log(
-      `페이지 ${pageNo} 클릭 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
-    );
-
-    if (
-      current === pageNo ||
-      urlPageNo === pageNo
-    ) {
-      return true;
+    if (response && !response.ok()) {
+      throw new Error(
+        `HTTP 오류: ${response.status()}`
+      );
     }
 
-  } catch (e) {
+    await page.waitForTimeout(900);
+
+    const actualPage = Number(
+      new URL(page.url()).searchParams.get('page')
+    );
+
+    if (actualPage !== pageNo) {
+      throw new Error(
+        `페이지 번호 불일치: 요청=${pageNo}, 실제=${actualPage}`
+      );
+    }
 
     console.log(
-      `페이지 ${pageNo} 실제 링크 클릭 실패: ${e.message}`
-    );
-  }
-
-  /*
-    2순위:
-    클릭이 막혀도 페이지에서 읽은 실제 href를 그대로 사용한다.
-    total 값도 사이트가 준 값을 그대로 유지한다.
-  */
-  try {
-
-    console.log(
-      `페이지 ${pageNo} 실제 href 직접 이동: ${targetHref}`
+      `보험신보 ${pageNo}페이지 접속 성공`
     );
 
-    await page.goto(
-      targetHref,
-      {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-        referer: insweekBaseUrl()
-      }
-    );
+    return true;
 
-    await page.waitForTimeout(800);
-
-    const current =
-      await getInsweekCurrentPageNo(page);
-
-    const urlPageNo = (() => {
-      try {
-        return Number(
-          new URL(page.url())
-            .searchParams
-            .get('page')
-        );
-      } catch (_) {
-        return 0;
-      }
-    })();
-
-    console.log(
-      `페이지 ${pageNo} href 이동 후 | 현재페이지=${current || '확인불가'} | URL=${page.url()}`
-    );
-
-    return (
-      current === pageNo ||
-      urlPageNo === pageNo
-    );
-
-  } catch (e) {
-
-    console.log(
-      `페이지 ${pageNo} 실제 href 이동 실패: ${e.message}`
+  } catch (error) {
+    console.error(
+      `보험신보 ${pageNo}페이지 접속 실패: ${error.message}`
     );
 
     return false;
   }
 }
 
-/* =========================================================
-   현재 보험신보 목록 페이지에서
 
-   작성일
-   제목
-   URL
-
-   추출
-========================================================= */
 
 async function extractCurrentList(
   page
