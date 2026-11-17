@@ -835,7 +835,7 @@ async function collectInsweekList(
 
     for (
       let pageNo = 1;
-      pageNo <= 3;
+      pageNo <= 15;
       pageNo++
     ) {
 
