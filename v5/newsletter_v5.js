@@ -375,113 +375,48 @@ function parseInsweekDate(text) {
    보험신보 신상품 페이지 기본 URL
 ========================================================= */
 
-function insweekBaseUrl() {
+const INSWEEK_URL =
+  'https://www.insweek.co.kr/news/articleList.html' +
+  '?page=1&total=2120&sc_section_code=&sc_sub_section_code=S2N19' +
+  '&sc_serial_code=&sc_area=&sc_level=&sc_article_type=' +
+  '&sc_view_level=&sc_sdate=&sc_edate=&sc_serial_number=' +
+  '&sc_word=&sc_andor=&sc_word2=&box_idxno=&sc_multi_code=' +
+  '&sc_is_image=&sc_is_movie=&sc_user_name=&sc_order_by=E';
 
-  return (
-    'https://www.insweek.co.kr/news/articleList.html' +
-    '?page=1' +
-    '&total=2120' +
-    '&sc_sub_section_code=S2N19' +
-    '&view_type=sm'
-  );
-
+function insweekBaseUrl(pageNo = 1) {
+  const url = new URL(INSWEEK_URL);
+  url.searchParams.set('page', String(pageNo));
+  return url.toString();
 }
 
-
-/* =========================================================
-   보험신보 페이지 탐색 (최대 4페이지)
-   - 사이트가 실제로 제공하는 페이지 링크를 사용
-   - view_type=sm 등 일부 파라미터 존재 여부를 강제하지 않음
-   - URL 숫자만으로 기사 목록이 바뀌었다고 판단하지 않음
-========================================================= */
-
+/* 페이지 번호는 지정된 원본 URL의 page 값만 변경하여 직접 접속 */
 async function getInsweekCurrentPageNo(page) {
-  const selectors = [
-    'ul.pagination li.pagination-item.current',
-    'ul.pagination .current',
-    '.pagination .active',
-    '.pagination [aria-current="page"]'
-  ];
-  for (const selector of selectors) {
-    const node = page.locator(selector).first();
-    const value = (await node.textContent().catch(() => '')) || '';
-    const match = value.trim().match(/\d+/);
-    if (match) return Number(match[0]);
-  }
-  // 페이지 표시를 찾지 못하는 경우만 URL을 참조한다.
-  const urlValue = new URL(page.url()).searchParams.get('page');
-  return urlValue && /^\d+$/.test(urlValue) ? Number(urlValue) : 1;
+  const number = Number(new URL(page.url()).searchParams.get('page'));
+  return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
 async function clickInsweekPageNumber(page, pageNo) {
-  const links = page.locator(
-    'ul.pagination a, .pagination a, a.pagination-link'
-  );
-  const count = await links.count();
-  console.log(`보험신보 ${pageNo}페이지: 탐색 가능한 링크 ${count}개`);
-
-  let targetIndex = -1;
-  let targetUrl = '';
-  for (let i = 0; i < count; i++) {
-    const link = links.nth(i);
-    const label = ((await link.textContent().catch(() => '')) || '').trim();
-    const href = await link.getAttribute('href').catch(() => '');
-    if (!href || href.startsWith('javascript:') || href === '#') continue;
-    try {
-      const url = new URL(href.replace(/&amp;|&#38;/g, '&'), page.url());
-      const hrefPage = Number(url.searchParams.get('page'));
-      if (url.hostname !== 'www.insweek.co.kr') continue;
-      if (url.pathname !== '/news/articleList.html') continue;
-      const section = url.searchParams.get('sc_sub_section_code');
-      if (section && section !== 'S2N19') continue;
-      if (hrefPage === pageNo || label === String(pageNo)) {
-        // 요청한 대로 모든 목록 페이지에 total=2120 고정
-        url.searchParams.set('total', '2120');
-        targetIndex = i;
-        targetUrl = url.toString();
-        break;
-      }
-    } catch (_) {}
-  }
-
-  if (targetIndex < 0) {
-    const samples = await links.evaluateAll(nodes => nodes.map(a => ({
-      text: (a.textContent || '').trim(), href: a.getAttribute('href')
-    })));
-    console.error(`보험신보 ${pageNo}페이지 링크 없음: ${JSON.stringify(samples)}`);
-    return false;
-  }
-
-  console.log(`보험신보 ${pageNo}페이지 실제 링크: ${targetUrl}`);
+  const targetUrl = insweekBaseUrl(pageNo);
+  console.log(`보험신보 ${pageNo}페이지 직접 접속: ${targetUrl}`);
   try {
-    // 클릭 시에도 수정된 total=2120 URL로 이동하도록 링크 갱신
-    await links.nth(targetIndex).evaluate((a, href) => {
-      a.setAttribute('href', href);
-    }, targetUrl);
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 })
-        .catch(() => null),
-      links.nth(targetIndex).click({ timeout: 15000 })
-    ]);
-    await page.waitForTimeout(1000);
-  } catch (error) {
-    console.log(`페이지 클릭 실패, 실제 href로 재시도: ${error.message}`);
     const response = await page.goto(targetUrl, {
-      waitUntil: 'domcontentloaded', timeout: 30000
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
     });
     if (response && !response.ok()) {
-      throw new Error(`보험신보 ${pageNo}페이지 HTTP ${response.status()}`);
+      throw new Error(`HTTP ${response.status()}`);
     }
-    await page.waitForTimeout(1000);
-  }
-
-  const actual = await getInsweekCurrentPageNo(page);
-  console.log(`페이지 이동 결과: 화면=${actual}, URL=${page.url()}`);
-  if (actual !== pageNo) {
-    console.error(`요청한 ${pageNo}페이지와 현재 ${actual}페이지가 다릅니다.`);
+    await page.waitForTimeout(900);
+    const actual = await getInsweekCurrentPageNo(page);
+    console.log(`페이지 이동 결과: URL=${page.url()}`);
+    if (actual !== pageNo) {
+      throw new Error(`요청=${pageNo}, 응답 URL 페이지=${actual}`);
+    }
+    return true;
+  } catch (error) {
+    console.error(`보험신보 ${pageNo}페이지 접속 실패: ${error.message}`);
     return false;
   }
-  return true;
 }
 
 /* =========================================================
@@ -671,8 +606,8 @@ async function extractCurrentList(
 
 
 /* =========================================================
-   보험신보 1~4페이지 수집
-   - 첫 페이지 1회 방문 뒤 다음 숫자 링크 순차 클릭
+   보험신보 1~3페이지 수집
+   - 첫 페이지 1회 방문 뒤 지정 URL의 page 값만 바꾸어 직접 접속
    - 기사 20건 전체 로그 출력
    - 실제 기사 URL의 중복을 검증
 ========================================================= */
@@ -697,16 +632,16 @@ async function collectInsweekList(browser) {
     }
     await page.waitForTimeout(1000);
 
-    for (let pageNo = 1; pageNo <= 4; pageNo++) {
+    for (let pageNo = 1; pageNo <= 3; pageNo++) {
       if (pageNo > 1) {
         const moved = await clickInsweekPageNumber(page, pageNo);
         if (!moved) {
-          throw new Error(`보험신보 ${pageNo}페이지 숫자 링크 이동 실패`);
+          throw new Error(`보험신보 ${pageNo}페이지 직접 접속 실패`);
         }
       }
 
       const current = await getInsweekCurrentPageNo(page);
-      console.log(`보험신보 ${pageNo}/4페이지 확인`);
+      console.log(`보험신보 ${pageNo}/3페이지 확인`);
       console.log(`현재 URL: ${page.url()}`);
       console.log(`pagination 현재 페이지: ${current}`);
       if (current !== pageNo) {
