@@ -396,187 +396,37 @@ function insweekBaseUrl(pageNo = 1) {
    추출
 ========================================================= */
 
-async function extractCurrentList(
-  page
-) {
-
-  return page.evaluate(
-    () => {
-
-      const results = [];
-
-
-      /*
-        보험신보 작성일
-      */
-
-      const dateNodes =
-        Array.from(
-          document.querySelectorAll(
-            '.altlist-info-item'
-          )
-        );
-
-
-      for (
-        const dateEl
-        of dateNodes
-      ) {
-
-        const dateText =
-          (
-            dateEl.textContent ||
-            ''
-          ).trim();
-
-
-        /*
-          작성일 형태
-
-          10-14 09:00
-        */
-
-        if (
-          !/\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/
-            .test(
-              dateText
-            )
-        ) {
-
-          continue;
-
-        }
-
-
-        let container =
-          dateEl;
-
-
-        let selectedLink =
-          null;
-
-
-        /*
-          날짜가 들어있는 영역에서
-          부모를 올라가면서
-          같은 기사 링크 탐색
-        */
-
-        for (
-          let depth = 0;
-          depth < 10;
-          depth++
-        ) {
-
-          if (
-            !container
-          ) {
-
-            break;
-
-          }
-
-
-          const links =
-            Array.from(
-              container.querySelectorAll(
-                'a[href*="articleView.html"]'
-              )
-            )
-
-            .map(
-              a => ({
-
-                title:
-                  (
-                    a.innerText ||
-                    a.textContent ||
-                    ''
-                  ).trim(),
-
-                url:
-                  a.href ||
-                  ''
-
-              })
-            )
-
-            .filter(
-              x =>
-                x.title &&
-                x.url &&
-                x.title.length >= 4
-            );
-
-
-          if (
-            links.length > 0
-          ) {
-
-            /*
-              링크가 여러 개면
-              가장 긴 텍스트를 제목으로 사용
-            */
-
-            links.sort(
-              (a, b) =>
-                b.title.length -
-                a.title.length
-            );
-
-
-            selectedLink =
-              links[0];
-
-
-            break;
-
-          }
-
-
-          container =
-            container.parentElement;
-
-        }
-
-
-        if (
-          !selectedLink
-        ) {
-
-          continue;
-
-        }
-
-
-        results.push({
-
-          title:
-            selectedLink.title,
-
-          url:
-            selectedLink.url,
-
-          dateText
-
-        });
-
-      }
-
-
-      return results;
-
+async function extractCurrentList(page) {
+  // 반드시 보험신보 기사목록(section-list) 내부의 목록만 추출한다.
+  // 페이지 공통 최신기사/실시간기사 영역은 대상에서 제외한다.
+  return await page.evaluate(() => {
+    const list = document.querySelector('article#section-list ul.altlist-text');
+    if (!list) {
+      throw new Error('보험신보 본문 기사목록(article#section-list ul.altlist-text)을 찾을 수 없습니다.');
     }
-  );
 
+    return [...list.querySelectorAll(':scope > li.altlist-text-item:not(.blind)')]
+      .map(li => {
+        const link = li.querySelector('h2.altlist-subject > a[href*="articleView.html"]');
+        const dateElement = [...li.querySelectorAll('.altlist-info-item')]
+          .find(el => /\b\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}\b/.test(el.textContent || ''));
+        if (!link || !dateElement) return null;
+        const title = (link.textContent || '').replace(/\s+/g, ' ').trim();
+        const url = link.href || '';
+        const dateText = (dateElement.textContent || '').trim();
+        return title && url ? { title, url, dateText } : null;
+      })
+      .filter(Boolean);
+  });
 }
-
 
 /* =========================================================
    보험신보 1~3페이지 수집
-   - 사용자 지정 URL의 page 번호만 변경
-   - 중복 목록일 경우 동일 URL로만 재시도
-   - 페이지별 20건 전체 로그 출력
+   - 사용자가 지정한 긴 주소만 사용 (page 값만 1, 2, 3 변경)
+   - total=2120 고정
+   - 공통 실시간기사 영역 제외: article#section-list ul.altlist-text
+   - 동일 브라우저 컨텍스트/세션 유지
+   - 중복 목록 검증 및 같은 URL로 재시도
 ========================================================= */
 async function collectInsweekList(browser) {
   const start = `${TARGET_MONTH}-01`;
@@ -584,94 +434,83 @@ async function collectInsweekList(browser) {
   const endDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
   const end = `${TARGET_MONTH}-${String(endDay).padStart(2, '0')}`;
   const map = new Map();
-  const seenPageSignatures = new Set();
+  const signatures = new Set();
   const MAX_PAGES = 3;
   const MAX_ATTEMPTS = 4;
+  const context = await browser.newContext();
+  const page = await context.newPage();
 
-  for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
-    let successfulList = null;
-    const targetUrl = insweekBaseUrl(pageNo);
+  try {
+    for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
+      const url = insweekBaseUrl(pageNo);
+      let articles = null;
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      // 매 시도마다 새로운 브라우저 컨텍스트를 만들어 캐시 영향을 줄인다.
-      // 요청 URL은 모든 시도에서 정확히 동일하며 추가 쿼리 파라미터를 붙이지 않는다.
-      const context = await browser.newContext({
-        extraHTTPHeaders: {
-          'Cache-Control': 'no-cache, no-store, max-age=0',
-          Pragma: 'no-cache'
-        }
-      });
-      const page = await context.newPage();
-
-      try {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         console.log(`보험신보 ${pageNo}/${MAX_PAGES}페이지 시도 ${attempt}/${MAX_ATTEMPTS}`);
-        console.log(`요청 URL: ${targetUrl}`);
+        console.log(`요청 URL: ${url}`);
+        try {
+          const response = await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
+          });
+          if (response && !response.ok()) {
+            throw new Error(`HTTP ${response.status()}`);
+          }
+          await page.locator('article#section-list ul.altlist-text > li.altlist-text-item')
+            .first().waitFor({ state: 'attached', timeout: 12000 });
 
-        const response = await page.goto(targetUrl, {
-          waitUntil: 'domcontentloaded',
-          timeout: 30000
-        });
-        if (response && !response.ok()) {
-          throw new Error(`HTTP ${response.status()}`);
+          const raw = await extractCurrentList(page);
+          const signature = raw.map(x => x.url).join('|');
+          const actualPage = Number(new URL(page.url()).searchParams.get('page'));
+          const visiblePage = await page
+            .locator('article#section-list ul.pagination li.pagination-item.current')
+            .first().textContent().catch(() => '');
+          const visibleNo = Number(String(visiblePage || '').trim());
+          console.log(`응답 URL: ${page.url()}`);
+          console.log(`페이지 표시: ${visibleNo || '확인불가'} / URL: ${actualPage}`);
+          console.log(`본문 기사목록: ${raw.length}건`);
+          console.log(`첫 기사: ${raw[0]?.dateText || '-'} | ${raw[0]?.title || '-'}`);
+
+          if (actualPage !== pageNo || (visibleNo && visibleNo !== pageNo) ||
+              raw.length === 0 || signatures.has(signature)) {
+            console.warn(`페이지 ${pageNo} 본문 목록이 잘못됐거나 중복입니다. 같은 URL 재시도.`);
+            continue;
+          }
+          articles = raw;
+          signatures.add(signature);
+          console.log(`보험신보 ${pageNo}페이지 수집 확정: ${raw.length}건`);
+          for (const item of raw) {
+            console.log(`  ${item.dateText} | ${item.title}`);
+          }
+          break;
+        } catch (err) {
+          console.warn(`보험신보 ${pageNo}페이지 시도 실패: ${err.message}`);
         }
-        await page.locator('.altlist-info-item').first().waitFor({
-          state: 'attached', timeout: 12000
-        });
-
-        const currentUrl = page.url();
-        // URL상 page 번호만으로 실제 콘텐츠를 검증할 수 없으므로 서명 중복도 검증한다.
-        const current = Number(new URL(currentUrl).searchParams.get('page'));
-        const raw = await extractCurrentList(page);
-        const signature = raw.map(x => x.url || x.title || '').join('|');
-        console.log(`응답 URL: ${currentUrl}`);
-        console.log(`추출 기사: ${raw.length}건, URL상 페이지: ${current}`);
-        console.log(`첫 기사: ${raw[0]?.dateText || '-'} | ${raw[0]?.title || '-'}`);
-
-        if (current !== pageNo || raw.length === 0 ||
-            seenPageSignatures.has(signature)) {
-          console.warn(`페이지 ${pageNo} 응답이 비었거나 앞서 수집한 기사 목록과 동일함. 동일 URL 재시도.`);
-          continue;
-        }
-
-        successfulList = raw;
-        seenPageSignatures.add(signature);
-        console.log(`보험신보 ${pageNo}페이지 수집 확정: ${raw.length}건`);
-        for (const item of raw) {
-          console.log(`  ${item.dateText} | ${item.title}`);
-        }
-        break;
-      } catch (error) {
-        console.warn(`페이지 ${pageNo} 시도 ${attempt} 오류: ${error.message}`);
-      } finally {
-        await context.close();
       }
-    }
 
-    if (!successfulList) {
-      throw new Error(
-        `보험신보 ${pageNo}페이지를 ${MAX_ATTEMPTS}회 확인했지만 유효한 고유 기사 목록을 받지 못했습니다. ` +
-        `요청은 지정된 page=${pageNo} URL로만 수행했습니다.`
-      );
-    }
+      if (!articles) {
+        throw new Error(`보험신보 ${pageNo}페이지의 실제 기사목록을 ${MAX_ATTEMPTS}회 시도해도 확인하지 못했습니다.`);
+      }
 
-    for (const item of successfulList) {
-      if (!item.url || !item.title || !item.dateText) continue;
-      const articleDate = parseInsweekDate(item.dateText);
-      if (!articleDate || articleDate < start || articleDate > end) continue;
-      const title = clean(item.title);
-      const url = item.url.split('#')[0];
-      if (!map.has(url)) map.set(url, { title, url, articleDate });
+      for (const item of articles) {
+        if (!item.url || !item.title || !item.dateText) continue;
+        const articleDate = parseInsweekDate(item.dateText);
+        if (!articleDate || articleDate < start || articleDate > end) continue;
+        const title = clean(item.title);
+        const articleUrl = item.url.split('#')[0];
+        if (!map.has(articleUrl)) map.set(articleUrl, { title, url: articleUrl, articleDate });
+      }
+      console.log(`대상월 누적 기사: ${map.size}건`);
     }
-    console.log(`대상월 누적 기사: ${map.size}건`);
+  } finally {
+    await context.close();
   }
 
   const results = [...map.values()].sort((a, b) =>
     a.articleDate.localeCompare(b.articleDate)
   );
   console.log(`보험신보 ${TARGET_MONTH} 대상월 기사: ${results.length}건`);
-  for (const article of results) {
-    console.log(`${article.articleDate} | ${article.title}`);
-  }
+  for (const article of results) console.log(`${article.articleDate} | ${article.title}`);
   return results;
 }
 
