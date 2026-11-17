@@ -379,7 +379,9 @@ function insweekBaseUrl() {
 
   return (
     'https://www.insweek.co.kr/news/articleList.html' +
-    '?sc_sub_section_code=S2N19' +
+    '?page=1' +
+    '&total=2120' +
+    '&sc_sub_section_code=S2N19' +
     '&view_type=sm'
   );
 
@@ -433,6 +435,8 @@ async function clickInsweekPageNumber(page, pageNo) {
       const section = url.searchParams.get('sc_sub_section_code');
       if (section && section !== 'S2N19') continue;
       if (hrefPage === pageNo || label === String(pageNo)) {
+        // 요청한 대로 모든 목록 페이지에 total=2120 고정
+        url.searchParams.set('total', '2120');
         targetIndex = i;
         targetUrl = url.toString();
         break;
@@ -450,7 +454,10 @@ async function clickInsweekPageNumber(page, pageNo) {
 
   console.log(`보험신보 ${pageNo}페이지 실제 링크: ${targetUrl}`);
   try {
-    // 페이지 번호를 브라우저에서 직접 클릭하는 방식과 동일하게 처리
+    // 클릭 시에도 수정된 total=2120 URL로 이동하도록 링크 갱신
+    await links.nth(targetIndex).evaluate((a, href) => {
+      a.setAttribute('href', href);
+    }, targetUrl);
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 })
         .catch(() => null),
